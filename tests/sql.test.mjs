@@ -565,3 +565,19 @@ test("leaders hear about new riders and new ride requests (not ones a leader add
   assert.match(rows[1].body, /^Nina \(\+1\) asked for a ride for Sunday, \w+ \d+\. \d+ requests? \(\d+ seats\) so far\.$/);
   assert.equal(rows[1].tag, `requests-${day}`);
 });
+
+test("a driver gets a notification when a leader approves them", async () => {
+  await db.exec("delete from push_queue");
+  const u = "00000000-0000-0000-0000-0000000001f1";
+  await db.query("insert into auth.users (id,email) values ($1,'newdrv@example.com')", [u]);
+  U.newdrv = u;
+  await as("newdrv", () => db.query("insert into profiles (user_id,full_name,role,seats) values ($1,'Kemi Wheels','driver',3)", [u]));
+  const id = (await q("select id from profiles where user_id=$1", [u]))[0].id;
+  await as("newdrv", () => db.query("select save_push_sub('https://push.example.com/kemi','k','a')"));
+  await db.exec("delete from push_queue");
+  await as("leader", () => db.query("update profiles set driver_status='cleared', licence_ok=true, insurance_ok=true where id=$1", [id]));
+  const rows = await q("select profile_id, title, body from push_queue");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].profile_id, id);
+  assert.match(rows[0].body, /^Thank you, Kemi! You can now be given riders\./);
+});

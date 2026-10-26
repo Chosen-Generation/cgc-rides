@@ -57,7 +57,7 @@ const say = (msg) => { S.toast = msg; };
 // After anything that may notify someone, ask the sender to deliver what's waiting (a moment later,
 // so several quick changes go out together). Clicks that only look at things don't.
 const READ_ONLY = new Set(["home", "demo-start", "goto-signin", "reg-back", "reg-role", "signin-reset", "tab", "pick-sunday", "copy",
-  "export-people", "export-backup", "view-plan", "hide-plan", "edit", "edit-cancel", "refresh-now", "push-later", "viewas", "signout"]);
+  "export-people", "export-backup", "view-plan", "hide-plan", "copy-from", "reset-driver-msg", "edit", "edit-cancel", "refresh-now", "push-later", "viewas", "signout"]);
 let flushTimer = null;
 function flushSoon() {
   if (!S.session || typeof store?.flushPush !== "function") return;
@@ -325,6 +325,8 @@ const actions = {
     S.sunday = d.sunday; S.planOpen = false; planViewFromSaved(); await autoUpdatePlan();
   },
   copy(d) { return copyText(d.text).then(() => say("Copied. Paste it into your message.")); },
+  "copy-from"(d) { const el = document.getElementById(d.from); return copyText(el ? el.value : "").then(() => say("Copied. Paste it into your message.")); },
+  "reset-driver-msg"() { try { localStorage.removeItem("cgc-driver-msg"); } catch (_) {} say("Message reset."); },
 
   // rider
   async "cancel-ride"(d) { if (!confirm("Tell the team you can't make it on " + fmtDate(d.sunday) + "?")) return; await store.cancelRide(d.sunday); await reload(); say("Okay, we've let the team know."); },
@@ -721,6 +723,12 @@ root.addEventListener("focusin", (e) => {
   if (warmed || !(e.target instanceof HTMLInputElement) || e.target.name !== "address") return;
   warmed = true; // opens the connection now, so the first real search answers faster
   fetch(`${CONFIG.geocoding.photonUrl}/api/?q=Saskatoon&limit=1`).catch(() => {});
+});
+// Remember an edited message on this phone (e.g. the driver-check message).
+root.addEventListener("input", (e) => {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.remember) return;
+  try { localStorage.setItem(el.dataset.remember, el.value); el.defaultValue = el.value; } catch (_) {}
 });
 root.addEventListener("input", (e) => {
   const input = e.target;
