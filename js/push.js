@@ -47,14 +47,23 @@ function deviceName() {
   return `${os} · ${br}`;
 }
 
-/** Must be called straight from a tap (browsers only ask then). Returns the new state. */
-export async function turnOn(store) {
-  const perm = await Notification.requestPermission();
+const within = (ms, promise, message) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
+
+/** Starts the browser's question. Must be called straight from a tap (browsers only ask then). */
+export const askPermission = () => Promise.resolve(Notification.requestPermission());
+
+/**
+ * Finishes turning notifications on once the person has answered.
+ * Returns "on", "blocked" (they said no) or "off" (the question was closed or never shown).
+ */
+export async function turnOn(store, asking = askPermission()) {
+  const perm = await asking;
   if (perm !== "granted") return perm === "denied" ? "blocked" : "off";
-  const reg = await registration();
-  await navigator.serviceWorker.ready;
+  const reg = await within(15000, registration(), "This phone couldn't set up notifications (the app's helper didn't start). Close the app, open it again and try once more.");
+  await within(15000, navigator.serviceWorker.ready, "This phone couldn't set up notifications (the app's helper didn't start). Close the app, open it again and try once more.");
   let sub = await reg.pushManager.getSubscription();
-  if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(CONFIG.push.publicKey) });
+  if (!sub) sub = await within(20000, reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(CONFIG.push.publicKey) }),
+    "The phone's notification service didn't answer. Check your internet connection and try again.");
   await saveSub(store, sub);
   return "on";
 }

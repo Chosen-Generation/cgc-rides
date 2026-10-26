@@ -178,6 +178,8 @@ export async function createLiveStore(config, { createClient } = {}) {
     async logSignupIssue(category, message, role) { try { await sb.rpc("log_signup_issue", { p_category: category, p_message: message, p_role: role || null }); } catch (_) {} },
     // ---- phone notifications
     async savePushSub({ endpoint, p256dh, auth, device }) { await rpc("save_push_sub", { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth, p_device: device }); },
+    /** Sends this person a test notification. Returns the sender's answer ({ sent, ... }) or null. */
+    async pushTest() { await rpc("push_test"); return this.flushPush(); },
     async removePushSub(endpoint) { await rpc("remove_push_sub", { p_endpoint: endpoint }); },
     /** Leaders: queue messages for people (only those with notifications on get them). */
     async queuePush(items) {
