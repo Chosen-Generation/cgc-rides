@@ -554,6 +554,39 @@ function addressReminderBox(S) {
   return html + `</article>`;
 }
 
+// Drivers who signed up but aren't cleared yet: they show their licence and insurance to a leader
+// in person (nothing is copied or stored), then a leader ticks the boxes and sets them to cleared.
+export function driverCheckMessage(S) {
+  const leaders = (S.data.profiles || []).filter((p) => p.role === "leader")
+    .sort((a, b) => (b.isSupervisor ? 1 : 0) - (a.isSupervisor ? 1 : 0))
+    .map((p) => `${firstName(p.name)}${p.phone ? ` (${p.phone})` : ""}`);
+  const who = leaders.length > 1 ? `${leaders.slice(0, -1).join(", ")} or ${leaders.at(-1)}` : leaders[0] || "the transport team";
+  return `Hi! Thank you for signing up to drive with ${S.config.appName} 🚗
+
+Before we can give you riders, we need to see two things:
+1. Your driver's licence
+2. Your car insurance (the pink card)
+
+Please show them to ${who} after service on Sunday, or at any church event where we're together. It only takes a minute, and we don't keep copies.
+
+Once we've seen them, we'll approve you in the app and you'll get a notification. Thank you for serving!`;
+}
+function driverChecksBox(S) {
+  const pending = (S.data.profiles || []).filter((p) => p.role === "driver" && p.status === "pending");
+  if (!pending.length) return "";
+  let saved = null;
+  try { saved = localStorage.getItem("cgc-driver-msg"); } catch (_) {}
+  const msg = saved || driverCheckMessage(S);
+  const tick = (ok, label) => `${ok ? "✓" : "–"} ${label}`;
+  return `<article class="card soft"><h3>Drivers waiting for approval (${pending.length})</h3>
+    <p class="small muted">Ask them to show their licence and insurance to a leader in person. Once you've seen them: <strong>Review & approve</strong> → tick both → set the status to <strong>cleared</strong> → Save. They get a notification that they're approved.</p>
+    <ul class="plain">${pending.map((d) => `<li class="personrow"><div><strong>${esc(d.name)}</strong><br><span class="small muted">${esc(d.phone || "no phone")} · ${esc(d.email || "no email")}<br>${tick(d.licenceOk, "licence")} · ${tick(d.insuranceOk, "insurance")}${d.createdAt ? ` · signed up ${esc(fmtDate(String(d.createdAt).slice(0, 10), { month: "short", day: "numeric" }))}` : ""}</span></div>${btn("Review & approve", "edit", { id: d.id })}</li>`).join("")}</ul>
+    <label class="field">Message to send them <span class="small muted">(you can edit it; this phone remembers your version)</span>
+      <textarea id="driver-msg" rows="12" data-remember="cgc-driver-msg">${esc(msg)}</textarea></label>
+    <div class="row wrap">${btn("Copy message", "copy-from", { from: "driver-msg" }, "primary")}${btn("Copy all their emails", "copy", { text: pending.map((d) => d.email).filter(Boolean).join(", ") })}${btn("Copy all their phone numbers", "copy", { text: pending.map((d) => d.phone).filter(Boolean).join(", ") })}${saved ? btn("Reset message", "reset-driver-msg", {}, "link") : ""}</div>
+  </article>`;
+}
+
 // People who signed in with their email but never filled in their details.
 function unregisteredBox(S) {
   const list = S.data.unregistered || [];
@@ -616,7 +649,7 @@ function peopleTab(S) {
     return `<li class="personrow"><div><strong>${esc(d.name)}</strong> ${st}<br><span class="small muted">${esc(d.seats)} seats · ${esc(d.neighbourhood || "no area")} · ${checkNote} · licence ${d.licenceOk ? "✓" : "–"} · insurance ${d.insuranceOk ? "✓" : "–"}${pushMark(d)}</span></div>${btn("Edit / review", "edit", { id: d.id })}</li>`;
   };
   const rRow = (r) => `<li class="personrow"><div><strong>${esc(r.name)}</strong> ${riderBadges(r)}<br><span class="small muted">${esc(r.neighbourhood || "")} · ${r.textsConsentAt ? "texts OK" : "no text consent"}${r.weeklyCheckin ? " · weekly check-in" : ""}${pushMark(r)}</span></div>${btn("Edit", "edit", { id: r.id })}</li>`;
-  return `${teamSection(S)}${unregisteredBox(S)}${addressReminderBox(S)}<div class="row wrap">${btn("Add a rider who phoned in", "edit", { id: "new" }, "primary")}</div>
+  return `${teamSection(S)}${driverChecksBox(S)}${unregisteredBox(S)}${addressReminderBox(S)}<div class="row wrap">${btn("Add a rider who phoned in", "edit", { id: "new" }, "primary")}</div>
     <h3>Drivers (${drivers.length})</h3><ul class="plain">${drivers.map(dRow).join("") || "<li class='muted'>No drivers yet.</li>"}</ul>
     <h3>Riders (${riders.length})</h3><ul class="plain">${riders.map(rRow).join("") || "<li class='muted'>No riders yet.</li>"}</ul>
     <h3>Keep a copy</h3>
