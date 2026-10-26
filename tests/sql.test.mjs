@@ -534,3 +534,34 @@ test("a test notification goes only to yourself, and only if this person has a d
   assert.deepEqual(rows.map((r) => [r.full_name, r.title]), [["Dora Driver", "Notifications are on ✓"]]);
   assert.equal((await as("rr", () => q("select push_test() as n")))[0].n, 0);
 });
+
+test("sign-up problems: anyone signed in can note their own; only leaders can read them", async () => {
+  const u = "00000000-0000-0000-0000-0000000001d1";
+  await db.query("insert into auth.users (id,email) values ($1,'newbie@example.com')", [u]);
+  await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${u}',false), set_config('request.jwt.claim.email','newbie@example.com',false);`);
+  try {
+    await db.query("select log_signup_issue('Home address', 'We couldn''t find that exact house.', 'rider')");
+    assert.equal((await q("select * from signup_issues")).length, 0); // can't read them back
+  } finally { await db.exec("reset role"); }
+  const rows = await as("leader", () => q("select email, category, role from signup_issues"));
+  assert.deepEqual(rows.map((r) => ({ ...r })), [{ email: "newbie@example.com", category: "Home address", role: "rider" }]);
+});
+
+test("leaders hear about new riders and new ride requests (not ones a leader adds)", async () => {
+  await db.exec("delete from push_queue");
+  const u = "00000000-0000-0000-0000-0000000001e1";
+  await db.query("insert into auth.users (id,email) values ($1,'nina@example.com')", [u]);
+  U.nina = u;
+  await as("nina", () => db.query("insert into profiles (user_id,full_name,role,neighbourhood) values ($1,'Nina New','rider','Avalon')", [u]));
+  const nina = (await q("select id from profiles where user_id=$1", [u]))[0].id;
+  const day = sundayInDays(21);
+  await as("nina", () => db.query("insert into ride_requests (rider_id,sunday,extra_people) values ($1,$2,1)", [nina, day]));
+  // A rider the leader adds by phone, with a request the leader adds: no notifications.
+  const [phoned] = await as("leader", () => q("insert into profiles (full_name,role) values ('Phil Phone','rider') returning id"));
+  await as("leader", () => db.query("insert into ride_requests (rider_id,sunday) values ($1,$2)", [phoned.id, day]));
+  const rows = await q("select title, body, tag from push_queue order by id");
+  assert.deepEqual(rows.map((r) => r.title), ["New rider registered", "New ride request"]);
+  assert.match(rows[0].body, /^Nina New signed up for rides \(Avalon\)/);
+  assert.match(rows[1].body, /^Nina \(\+1\) asked for a ride for Sunday, \w+ \d+\. \d+ requests? \(\d+ seats\) so far\.$/);
+  assert.equal(rows[1].tag, `requests-${day}`);
+});

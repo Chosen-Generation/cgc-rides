@@ -138,10 +138,11 @@ export function createDemoStore({ now = () => new Date() } = {}) {
     async leaderData() {
       need(isLeader(), "Only the transport leader can see this.");
       return fresh({ profiles: db.profiles, requests: db.requests, weeks: db.weeks, plans: db.plans, alerts: db.alerts, consentLog: db.consentLog, helpRequests: db.help, teamLog: db.teamLog,
-        unregistered: db.unregistered, pushPeople: ["d-grace", "r-mary"] });
+        unregistered: db.unregistered, signupIssues: db.signupIssues, pushPeople: ["d-grace", "r-mary"] });
     },
 
     // ---- team (same rules as the database: only the supervisor; two leaders besides them at most)
+    async logSignupIssue(category, message, role) { db.signupIssues.unshift({ at: now().toISOString(), email: me()?.email || "demo", category, message, role }); },
     // ---- phone notifications: not sent in the demo
     async savePushSub() {}, async pushTest() { return { sent: 1 }; }, async removePushSub() {}, async queuePush(items) { const on = ["d-grace", "r-mary"]; const mine = items.filter((i) => on.includes(i.profileId)); db.pushLog.push(...mine); return mine.length; }, async flushPush() { return null; },
     pushLog() { return db.pushLog; },

@@ -581,12 +581,19 @@ Thank you!`;
 4. Save, and you're all set.
 
 Thank you!`;
-  const rows = (arr, label) => `<ul class="plain">${arr.map((u) => `<li class="personrow"><div><strong>${esc(u.email)}</strong><br><span class="small muted">${label} ${esc(when(label === "asked" ? u.signedUpAt : u.lastSignInAt))}</span></div>${btn("Copy email", "copy", { text: u.email })}</li>`).join("")}</ul>`;
+  const issues = S.data.signupIssues || [];
+  const lastIssue = (email) => issues.find((x) => (x.email || "").toLowerCase() === (email || "").toLowerCase());
+  const rows = (arr, label) => `<ul class="plain">${arr.map((u) => { const li = lastIssue(u.email); return `<li class="personrow"><div><strong>${esc(u.email)}</strong><br><span class="small muted">${label} ${esc(when(label === "asked" ? u.signedUpAt : u.lastSignInAt))}</span>${li ? `<br><span class="small warn-text">Stopped at: ${esc(li.category)}: “${esc(li.message)}”</span>` : ""}</div>${btn("Copy email", "copy", { text: u.email })}</li>`; }).join("")}</ul>`;
   const emails = (arr) => arr.map((u) => u.email).join(", ");
   const group = (arr, title, why, label, msg) => arr.length ? `<h4>${title} (${arr.length})</h4><p class="small muted">${why}</p>${rows(arr, label)}
     <div class="row wrap">${btn("Copy reminder message", "copy", { text: msg })}${btn("Copy all their emails", "copy", { text: emails(arr) })}</div>` : "";
+  // What stopped people in the last 30 days, most common first (one count per person and problem).
+  const seen = new Set(), counts = {};
+  for (const x of issues) { const k = `${x.email}|${x.category}`; if (seen.has(k)) continue; seen.add(k); counts[x.category] = (counts[x.category] || 0) + 1; }
+  const summary = Object.entries(counts).sort((a, b) => b[1] - a[1]);
   return `<article class="card soft"><h3>Started but not registered (${list.length})</h3>
     <p class="small muted">They drop off this list once they finish. Send each group its own reminder.</p>
+    ${summary.length ? `<div class="banner warn small"><strong>What stopped people (last 30 days):</strong> ${summary.map(([c, n]) => `${esc(c)} ${n}`).join(" · ")}</div>` : ""}
     ${group(neverOpened, "Never opened the sign-in email", "They asked for the email but never used it. Usually it landed in spam, or they stopped waiting.", "asked", msgEmail)}
     ${group(stopped, "Signed in, but didn't fill in their details", "They got in but stopped at the form, often at the home address.", "signed in", msgDetails)}
   </article>`;
