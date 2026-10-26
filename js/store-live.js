@@ -174,6 +174,8 @@ export async function createLiveStore(config, { createClient } = {}) {
     },
     // ---- phone notifications
     async savePushSub({ endpoint, p256dh, auth, device }) { await rpc("save_push_sub", { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth, p_device: device }); },
+    /** Sends this person a test notification. Returns the sender's answer ({ sent, ... }) or null. */
+    async pushTest() { await rpc("push_test"); return this.flushPush(); },
     async removePushSub(endpoint) { await rpc("remove_push_sub", { p_endpoint: endpoint }); },
     /** Leaders: queue messages for people (only those with notifications on get them). */
     async queuePush(items) {

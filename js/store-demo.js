@@ -143,7 +143,7 @@ export function createDemoStore({ now = () => new Date() } = {}) {
 
     // ---- team (same rules as the database: only the supervisor; two leaders besides them at most)
     // ---- phone notifications: not sent in the demo
-    async savePushSub() {}, async removePushSub() {}, async queuePush(items) { db.pushLog.push(...items); return items.length; }, async flushPush() { return null; },
+    async savePushSub() {}, async pushTest() { return { sent: 1 }; }, async removePushSub() {}, async queuePush(items) { const on = ["d-grace", "r-mary"]; const mine = items.filter((i) => on.includes(i.profileId)); db.pushLog.push(...mine); return mine.length; }, async flushPush() { return null; },
     pushLog() { return db.pushLog; },
 
     async setTeamRole(id, role) {

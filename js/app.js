@@ -6,15 +6,15 @@ import { createDemoStore } from "./store-demo.js";
 import { peopleCsv, backupJson, stamp, download } from "./backup.js";
 import { toISO, fmtDate, fmtMin, toMin } from "./dates.js";
 const fmtMinLabel = (hhmm) => fmtMin(toMin(hhmm));
-import { confirmAddress, suggestAddresses, refineSuggestions, normalizePhone, normalizePostal, isConfirmed, houseNumberOf, inSaskatoon, reverseLookup, locateStreet, nearestNeighbourhood } from "./geo.js";
+import { confirmAddress, suggestAddresses, refineSuggestions, normalizePhone, normalizePostal, isConfirmed, houseNumberOf, inSaskatoon, reverseLookup, locateStreet, nearestNeighbourhood, haversineKm } from "./geo.js";
 import { driverIssue } from "./matching.js";
 import { draftPlan, recompute, applyMove, reassignDriver, sundayPeople, rankHelpers } from "./planner.js";
 import { driverAvailable, CONSENT_WORDING, isDriver } from "./models.js";
-import { shell, landingView, signInView, demoPickerView, roleView, esc } from "./views.js";
+import { shell, landingView, signInView, demoPickerView, roleView, esc, remindGroups, REMIND } from "./views.js";
 import { lastMinuteBroadcast } from "./texts.js";
 import { setServices, upcomingDays, configFor, serviceFor } from "./services.js";
 import { DEMO_CHURCH } from "./demo-data.js";
-import { pushState, turnOn, turnOff, resync } from "./push.js";
+import { pushState, turnOn, turnOff, resync, askPermission } from "./push.js";
 import { approvalPings } from "./notify.js";
 
 const root = document.getElementById("app");
@@ -218,7 +218,7 @@ function readProfile(form) {
   // Filled in when the person picks a suggestion (cleared again if they edit the address).
   out.picked = text("pickedAddress") ? { address: text("pickedAddress"), lat: num("pickedLat"), lng: num("pickedLng") } : null;
   // A pin the person placed on their house (phone location or by hand).
-  out.pin = num("pinLat") != null && num("pinLng") != null ? { lat: num("pinLat"), lng: num("pinLng") } : null;
+  out.pin = num("pinLat") != null && num("pinLng") != null ? { lat: num("pinLat"), lng: num("pinLng"), how: text("pinHow") } : null;
   if (has("role")) out.role = text("role");
   if (has("alsoDrives")) out.status = bool("alsoDrives") ? "cleared" : "none";
   if (has("seats")) Object.assign(out, { seats: Number(f.get("seats")) || 0, vehicle: text("vehicle"), drivesEveryWeek: bool("drivesEveryWeek"), secondTrip: bool("secondTrip") });
@@ -251,7 +251,7 @@ async function checkProfile(raw, previous = {}, { strict }) {
     // The person put a pin on their house: their typed address is kept, the pin gives the location.
     if (!houseNumberOf(patch.address)) throw new Error("Please type the address starting with the house number (for example 1666 Stonebridge Blvd), so the driver knows which door.");
     if (!inSaskatoon(pin.lat, pin.lng)) throw new Error("The pin is outside Saskatoon. Move it onto the house and try again.");
-    Object.assign(patch, { lat: pin.lat, lng: pin.lng, geoSource: "pin" });
+    Object.assign(patch, { lat: pin.lat, lng: pin.lng, geoSource: pin.how === "gps" ? "gps" : "pin" });
     if (!patch.neighbourhood) patch.neighbourhood = nearestNeighbourhood(pin.lat, pin.lng);
   } else if (unchanged) {
     Object.assign(patch, { lat: previous.lat, lng: previous.lng, geoSource: previous.geoSource, neighbourhood: previous.neighbourhood || patch.neighbourhood });
@@ -318,7 +318,7 @@ const actions = {
   "signin-reset"() { S.signInSent = ""; },
   async viewas(d) { store.viewAs(d.id); S.session = store.session(); S.tab = null; S.sunday = null; S.planView = null; S.editing = null; await reload(); say(`Viewing as ${S.me?.name}`); },
   async signout() { await store.signOut(); S.session = null; S.me = null; S.screen = "landing"; S.tab = null; S.planView = null; S.regRole = null; },
-  tab(d) { S.tab = d.tab; S.editing = null; S.formDraft = null; },
+  tab(d) { S.tab = d.tab; S.editing = null; S.formDraft = null; S.remindResult = null; if (S.pushNote?.kind !== "wait") S.pushNote = null; },
   async "pick-sunday"(d) {
     if (d.sunday === S.sunday) return;
     if (S.planView?.dirty && S.planView.edited && !confirm("You have unsaved changes to this plan. Switch anyway?")) return;
@@ -470,9 +470,37 @@ const actions = {
   },
   async "push-on"() {
     if (S.push === "ios-install") return;
-    S.push = await turnOn(store); // asks the browser straight from the tap
-    if (S.push === "on") say("Notifications are on. We'll ping this device when something changes for you.");
-    else if (S.push === "blocked") S.error = "Notifications were blocked. See My details for how to allow them.";
+    const asking = askPermission(); // straight from the tap, or the phone won't ask
+    S.pushNote = { kind: "wait", text: "Your phone should now ask whether to allow notifications. Tap Allow. Nothing popped up? Look for a bell or 🔒 icon beside the web address and allow notifications there." };
+    render();
+    try {
+      S.push = await turnOn(store, asking);
+    } catch (err) {
+      S.pushNote = { kind: "err", text: `Notifications aren't on yet. ${err.message}` };
+      return;
+    }
+    if (S.push === "on") {
+      S.pushNote = { kind: "wait", text: "✓ This phone is set up. Sending a test notification…" };
+      render();
+      const r = await store.pushTest().catch(() => null);
+      S.pushNote = r?.sent
+        ? { kind: "ok", text: "✓ Notifications are on. We just sent a test notification to this phone; it should appear in a few seconds." }
+        : { kind: "warn", text: "✓ This phone is set up for notifications, but the test message couldn't be sent just now. You'll still get real ones; if they never come, tell the transport leader." };
+    } else if (S.push === "blocked") {
+      S.pushNote = { kind: "err", text: "Notifications were blocked on this phone. To allow them: tap the 🔒 (or settings) icon beside the web address → Permissions (or Site settings) → Notifications → Allow. Then come back and tap Allow notifications again." };
+    } else {
+      S.pushNote = { kind: "warn", text: "The question was closed before you answered, so notifications aren't on yet. Tap Allow notifications again, then tap Allow. Still nothing? Tap the 🔒 icon beside the web address → Permissions → Notifications → Allow." };
+    }
+  },
+  async remind(d) {
+    const list = remindGroups(S)[d.group] || [];
+    if (!list.length) return;
+    const m = REMIND[d.group];
+    if (!confirm(`Send "${m.title}" to ${list.length} ${list.length === 1 ? "person" : "people"}?`)) return;
+    const sent = await store.queuePush(list.map((p) => ({ profileId: p.id, title: m.title, body: m.text, tag: `remind-${d.group}` })));
+    await store.flushPush();
+    const on = new Set(S.data.pushPeople || []);
+    S.remindResult = { group: d.group, sent: Number(sent) || 0, others: list.filter((p) => !on.has(p.id)) };
   },
   async "push-off"() { S.push = await turnOff(store); say("Notifications turned off for this device."); },
   "push-later"() { S.pushLater = true; try { localStorage.setItem("cgc-push-later", "1"); } catch {} say("No problem. You can turn notifications on any time from My details."); },
@@ -717,7 +745,7 @@ function pickSuggestion(btn) {
   if (!s || !form) return;
   field(form, "address").value = s.address;
   setPicked(form, s);
-  if (field(form, "pinLat")) { field(form, "pinLat").value = ""; field(form, "pinLng").value = ""; }
+  if (field(form, "pinLat")) { field(form, "pinLat").value = ""; field(form, "pinLng").value = ""; field(form, "pinHow").value = ""; }
   if (s.postcode && field(form, "postalCode")) field(form, "postalCode").value = s.postcode;
   if (s.neighbourhood && field(form, "neighbourhood")) { field(form, "neighbourhood").value = s.neighbourhood; form.querySelector(".hood-name").textContent = s.neighbourhood; }
   form.querySelector(".addr-status").innerHTML = `<span class="ok-text">✓ Found on the map${s.neighbourhood ? ` · ${esc(s.neighbourhood)}` : ""}</span>${s.postcode ? "" : " Please type your postal code below."}`;
@@ -896,6 +924,9 @@ async function onPin(btn) {
     if (!inSaskatoon(lat, lng)) { help.innerHTML = `<span class="warn-text">That spot is outside Saskatoon. Drag the pin onto the house.</span>`; return; }
     field(form, "pinLat").value = lat.toFixed(6);
     field(form, "pinLng").value = lng.toFixed(6);
+    // "gps" only if the pin is still where the phone was (they were at home); moved further = by hand.
+    const g = box._gps;
+    field(form, "pinHow").value = g && inSaskatoon(g.lat, g.lng) && haversineKm(g, { lat, lng }) <= 0.06 ? "gps" : "pin";
     setPicked(form, null);
     box.hidden = true;
     const typed = field(form, "address").value.trim();
@@ -926,6 +957,7 @@ async function onPin(btn) {
       if (!near) zoom = 13;
     }
     if (box._map) { box._map.remove(); box._map = null; }
+    box._gps = mode === "gps" ? { lat: start.lat, lng: start.lng } : null;
     const map = L.map(box.querySelector(".pinmap"), { zoomControl: true, attributionControl: true }).setView([start.lat, start.lng], zoom);
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map);
     const marker = L.marker([start.lat, start.lng], { draggable: true, autoPan: true }).addTo(map);

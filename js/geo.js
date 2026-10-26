@@ -100,9 +100,9 @@ export const AREA = { west: -106.85, south: 52.0, east: -106.45, north: 52.25 };
 const inArea = (lat, lng) => lat >= AREA.south && lat <= AREA.north && lng >= AREA.west && lng <= AREA.east;
 
 /** geo_source values that may be used for matching and timing. */
-// "pin": the person placed a pin on their house themselves (with their phone's location or by hand),
-// for homes the map service doesn't list by house number yet.
-export const CONFIRMED_SOURCES = new Set(["verified", "manual", "pin"]);
+// For homes the map service doesn't list by house number yet, the person marks the spot themselves:
+// "gps" = with their phone's location while at home; "pin" = by dragging a pin onto the house.
+export const CONFIRMED_SOURCES = new Set(["verified", "manual", "gps", "pin"]);
 export const inSaskatoon = (lat, lng) => lat != null && lng != null && inArea(Number(lat), Number(lng));
 export const isConfirmed = (p) => !!p && p.lat != null && p.lng != null && CONFIRMED_SOURCES.has(p.geoSource);
 

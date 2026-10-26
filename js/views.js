@@ -46,6 +46,9 @@ export function pushCard(S) {
   const role = S.me?.role;
   const detailsTab = S.tab === "details" || S.tab === "driving";
   if (!st || st === "unsupported" || st === "not-set-up") return "";
+  const n = S.pushNote;
+  const note = n ? `<p class="pushnote ${esc(n.kind)}" role="status">${esc(n.text)}</p>` : "";
+  if (st === "on" && n) return `<article class="card pushcard">${note}</article>`;
   if (st === "on") return detailsTab ? `<p class="small muted pushline">🔔 Notifications are on for this device. ${btn("Turn off", "push-off", {}, "link")}</p>` : "";
   if (S.pushLater && !detailsTab) return "";
   const later = detailsTab ? "" : btn("Not now", "push-later", {}, "link");
@@ -53,11 +56,12 @@ export function pushCard(S) {
     <p class="small">iPhones only send notifications from the app on your home screen. It takes a moment:</p>
     <ol class="small"><li>In Safari, tap the <strong>Share</strong> button (the square with an arrow).</li><li>Tap <strong>Add to Home Screen</strong>, then <strong>Add</strong>.</li><li>Open <strong>CGC Rides</strong> from your home screen, sign in, and tap <strong>Allow notifications</strong>.</li></ol>
     ${later}</article>`;
+  if (st === "blocked" && n) return `<article class="card pushcard">${note}</article>`;
   if (st === "blocked") return detailsTab ? `<article class="card pushcard"><h3>🔔 Notifications are blocked</h3>
     <p class="small">You said no earlier, so your browser won't ask again. To allow them: on Android (Chrome), tap the icon left of the web address → <strong>Permissions</strong> (or Site settings) → <strong>Notifications</strong> → <strong>Allow</strong>. On iPhone: <strong>Settings → Notifications → CGC Rides</strong> → Allow. Then come back here.</p></article>` : "";
   return `<article class="card pushcard"><h3>🔔 Get a notification ${esc(PUSH_WHAT[role] || PUSH_WHAT.rider)}</h3>
-    <p class="small muted">Works even when the app is closed. You can turn it off any time.</p>
-    <div class="row wrap">${btn("Allow notifications", "push-on", {}, "primary")}${later}</div></article>`;
+    <p class="small muted">Works even when the app is closed. You can turn it off any time.</p>${note}
+    <div class="row wrap">${btn(n && n.kind !== "wait" ? "Try again" : "Allow notifications", "push-on", {}, "primary")}${later}</div></article>`;
 }
 
 // ---------------------------------------------------------------- shell + entry screens
@@ -130,7 +134,7 @@ export function profileForm(S, p0 = {}, { leaderEditing = false, registering = f
   const req = `<span class="req" aria-hidden="true">*</span>`;
   const confirmed = isConfirmed(p0) && p.address === p0.address;
   const addrStatus = confirmed
-    ? `<span class="ok-text">✓ ${p0.geoSource === "pin" ? "Pin placed on the map" : "Confirmed on the map"}${p0.neighbourhood ? ` · ${esc(p0.neighbourhood)}` : ""}</span>`
+    ? `<span class="ok-text">✓ ${p0.geoSource === "pin" ? "Pin placed on the map" : p0.geoSource === "gps" ? "Located with your phone" : "Confirmed on the map"}${p0.neighbourhood ? ` · ${esc(p0.neighbourhood)}` : ""}</span>`
     : p.address
       ? `<span class="warn-text">Not confirmed yet.</span> Pick your address from the list. Not there? Use one of the options below.`
       : "Start typing your house number and street, then pick your address from the list.";
@@ -162,7 +166,7 @@ export function profileForm(S, p0 = {}, { leaderEditing = false, registering = f
       <div class="suggest" id="addr-suggest" role="listbox" hidden></div>
       <p class="small muted addr-status" id="addr-status" aria-live="polite">${addrStatus}</p>
       <input type="hidden" name="pickedAddress" value=""><input type="hidden" name="pickedLat" value=""><input type="hidden" name="pickedLng" value="">
-      <input type="hidden" name="pinLat" value=""><input type="hidden" name="pinLng" value="">
+      <input type="hidden" name="pinLat" value=""><input type="hidden" name="pinLng" value=""><input type="hidden" name="pinHow" value="">
       <p class="pinbar small">${leaderEditing ? "" : `<button type="button" class="btn link" data-pin="gps">📍 I'm at home: use my current location</button><br>`}
         <button type="button" class="btn link" data-pin="map">Can't find the address? Place a pin on the map</button></p>
       <div class="pinbox" hidden>
@@ -518,6 +522,38 @@ function teamSection(S) {
   return html;
 }
 
+// Leaders remind people about their home location: pins placed by hand (check it from home), and
+// addresses not confirmed yet (place a pin). Sent as a notification; the rest get a text to copy.
+export const REMIND = {
+  pins: { title: "Check your pin", text: "When you're at home, open Chosen Generation Rides, go to My details and tap \"I'm at home: use my current location\", so your driver comes to the right door." },
+  unconfirmed: { title: "Your address isn't on the map yet", text: "Open Chosen Generation Rides, go to My details and place a pin on your house (or pick your address from the list), so we can include you for rides." },
+};
+export function remindGroups(S) {
+  // People who can sign in (riders, drivers, and leaders who drive).
+  const people = (S.data.profiles || []).filter((p) => p.userId && (p.role !== "leader" || isDriver(p)));
+  return {
+    pins: people.filter((p) => p.geoSource === "pin"),
+    unconfirmed: people.filter((p) => !isConfirmed(p)),
+  };
+}
+function addressReminderBox(S) {
+  const g = remindGroups(S);
+  if (!g.pins.length && !g.unconfirmed.length && !S.remindResult) return "";
+  const names = (list) => list.map((p) => esc(firstName(p.name))).join(", ");
+  const part = (key, list, label, why) => list.length ? `<div class="remind"><p><strong>${label} (${list.length})</strong>: ${names(list)}</p>
+      <p class="small muted">${why}</p>${btn("Send reminder", "remind", { group: key })}</div>` : "";
+  let html = `<article class="card soft"><h3>Home locations</h3>
+    ${part("pins", g.pins, "Pins placed by hand", "They placed the pin away from home. The reminder asks them to check it with their phone's location when they're home.")}
+    ${part("unconfirmed", g.unconfirmed, "Not on the map yet", "They can't be matched until their home is confirmed. The reminder asks them to place a pin.")}`;
+  const r = S.remindResult;
+  if (r) {
+    const msg = `Hi! ${REMIND[r.group].text} ${S.appUrl || ""}`.trim();
+    html += `<div class="banner ok"><p>Reminder sent as a notification to ${r.sent} ${r.sent === 1 ? "person" : "people"}.</p>
+      ${r.others.length ? `<p>These don't have notifications on, so text them:</p><ul class="plain small">${r.others.map((p) => `<li>${esc(p.name)} · ${esc(p.phone || "no phone")}</li>`).join("")}</ul><p>${btn("Copy the text message", "copy", { text: msg })}</p>` : ""}</div>`;
+  }
+  return html + `</article>`;
+}
+
 // People who signed in with their email but never filled in their details.
 function unregisteredBox(S) {
   const list = S.data.unregistered || [];
@@ -563,7 +599,7 @@ function peopleTab(S) {
       ${S.editing !== "new" && p.role !== "leader" ? `<hr><h3>Remove ${esc(firstName(p.name))}</h3><p class="small muted">Deletes this person with their requests, availability and rides (for example a test name). Any plan they are in goes back to a draft so you can redo it. This cannot be undone.</p>${btn("Remove " + firstName(p.name), "remove-person", { id: p.id })}` : ""}</section>`;
   }
   const pushOn = new Set(S.data.pushPeople || []);
-  const pushMark = (p) => (pushOn.has(p.id) ? " · 🔔 notifications on" : "") + (p.geoSource === "pin" ? " · 📍 pin placed by them" : "");
+  const pushMark = (p) => (pushOn.has(p.id) ? " · 🔔 notifications on" : "") + (p.geoSource === "pin" ? " · 📍 pin placed by hand" : p.geoSource === "gps" ? " · 📍 located by phone" : "");
   const drivers = S.data.profiles.filter((p) => isDriver(p) || (p.role === "driver"));
   const riders = S.data.profiles.filter((p) => p.role === "rider");
   const dRow = (d) => {
@@ -573,7 +609,7 @@ function peopleTab(S) {
     return `<li class="personrow"><div><strong>${esc(d.name)}</strong> ${st}<br><span class="small muted">${esc(d.seats)} seats · ${esc(d.neighbourhood || "no area")} · ${checkNote} · licence ${d.licenceOk ? "✓" : "–"} · insurance ${d.insuranceOk ? "✓" : "–"}${pushMark(d)}</span></div>${btn("Edit / review", "edit", { id: d.id })}</li>`;
   };
   const rRow = (r) => `<li class="personrow"><div><strong>${esc(r.name)}</strong> ${riderBadges(r)}<br><span class="small muted">${esc(r.neighbourhood || "")} · ${r.textsConsentAt ? "texts OK" : "no text consent"}${r.weeklyCheckin ? " · weekly check-in" : ""}${pushMark(r)}</span></div>${btn("Edit", "edit", { id: r.id })}</li>`;
-  return `${teamSection(S)}${unregisteredBox(S)}<div class="row wrap">${btn("Add a rider who phoned in", "edit", { id: "new" }, "primary")}</div>
+  return `${teamSection(S)}${unregisteredBox(S)}${addressReminderBox(S)}<div class="row wrap">${btn("Add a rider who phoned in", "edit", { id: "new" }, "primary")}</div>
     <h3>Drivers (${drivers.length})</h3><ul class="plain">${drivers.map(dRow).join("") || "<li class='muted'>No drivers yet.</li>"}</ul>
     <h3>Riders (${riders.length})</h3><ul class="plain">${riders.map(rRow).join("") || "<li class='muted'>No riders yet.</li>"}</ul>
     <h3>Keep a copy</h3>
@@ -601,7 +637,7 @@ function alertsTab(S) {
       const pickup = seat?.pickupMin != null ? ` (pickup ${esc(fmtMin(seat.pickupMin))})` : ((a.message.match(/\(pickup ([^)]+)\)/) || [])[1] ? ` (pickup ${esc(a.message.match(/\(pickup ([^)]+)\)/)[1])})` : "");
       body = `<p><strong>${esc(r?.name || "A rider")} cancelled their ride for ${esc(day)}.</strong></p>` + (d
         ? `<p>They were in <strong>${esc(d.name)}</strong>'s car${pickup}, so ${esc(firstName(d.name))} now has a free seat${left ? "" : " and no one else to pick up"}. They've been taken out of the plan; if they ask again, they'll need your approval.</p>
-           <p class="small"><strong>Already done:</strong> the plan has been updated without ${esc(firstName(r?.name || "them"))}.<br>
+           <p class="small"><strong>Already done:</strong> the plan has been updated without ${esc(firstName(r?.name || "them"))}${plan?.status === "approved" && (S.data.pushPeople || []).includes(did) ? `, and ${esc(firstName(d.name))} got a notification on their phone` : ""}.<br>
            <strong>What to do:</strong> 1) Send ${esc(firstName(d.name))} the message below. ${left ? `2) In the Plan tab, tap <strong>Approve & share</strong> so ${esc(firstName(d.name))}'s pickup list and leave time are right, then send the new list from Texts. ` : ""}Then tap <strong>Mark done</strong>.</p>`
         : `<p class="small">They're no longer in the plan, so nothing else needs to change.</p>`);
       if (!a.resolved && d) {
