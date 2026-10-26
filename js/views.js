@@ -522,19 +522,38 @@ function teamSection(S) {
 function unregisteredBox(S) {
   const list = S.data.unregistered || [];
   if (!list.length) return "";
-  const when = (iso) => (iso ? fmtDate(String(iso).slice(0, 10), { month: "short", day: "numeric" }) : "");
-  const msg = `Hi! You started signing up for ${S.config.appName} but didn't finish.
+  // Local date (not UTC), e.g. "Oct 25".
+  const when = (iso) => (iso ? new Intl.DateTimeFormat("en-CA", { month: "short", day: "numeric" }).format(new Date(iso)) : "");
+  const url = S.appUrl || "the app";
+  // Asked for the sign-in email but never opened it: usually it went to spam, or they gave up waiting.
+  const neverOpened = list.filter((u) => !u.lastSignInAt);
+  // Opened the email and got in, but never filled in their details.
+  const stopped = list.filter((u) => u.lastSignInAt);
+  const msgEmail = `Hi! You started signing up for ${S.config.appName} but didn't finish.
 
-1. Open ${S.appUrl || "the app"}
+1. Open ${url}
 2. Sign in with this email address.
 3. We'll email you a sign-in link. If you don't see it within a minute, check your spam or junk folder. It's safe: it comes from our ride app's sign-in service. Mark it "Not spam", then tap the link.
 4. Fill in your details and you're all set for rides.
 
 Thank you!`;
-  return `<article class="card soft"><h3>Signed in but not registered (${list.length})</h3>
-    <p class="small muted">These people entered their email and code but never filled in their details, so they can't ask for rides or drive yet. Send them a reminder. They drop off this list once they finish.</p>
-    <ul class="plain">${list.map((u) => `<li class="personrow"><div><strong>${esc(u.email)}</strong><br><span class="small muted">signed in ${esc(when(u.lastSignInAt || u.signedUpAt))}</span></div>${btn("Copy email", "copy", { text: u.email })}</li>`).join("")}</ul>
-    <p>${btn("Copy reminder message", "copy", { text: msg })}</p></article>`;
+  const msgDetails = `Hi! You signed in to ${S.config.appName} but didn't finish filling in your details, so we can't include you for rides yet.
+
+1. Open ${url} (you may still be signed in).
+2. Fill in your name, phone and home address.
+3. If your address doesn't show up in the list, tap "Place a pin on the map" under the address and put the pin on your house.
+4. Save, and you're all set.
+
+Thank you!`;
+  const rows = (arr, label) => `<ul class="plain">${arr.map((u) => `<li class="personrow"><div><strong>${esc(u.email)}</strong><br><span class="small muted">${label} ${esc(when(label === "asked" ? u.signedUpAt : u.lastSignInAt))}</span></div>${btn("Copy email", "copy", { text: u.email })}</li>`).join("")}</ul>`;
+  const emails = (arr) => arr.map((u) => u.email).join(", ");
+  const group = (arr, title, why, label, msg) => arr.length ? `<h4>${title} (${arr.length})</h4><p class="small muted">${why}</p>${rows(arr, label)}
+    <div class="row wrap">${btn("Copy reminder message", "copy", { text: msg })}${btn("Copy all their emails", "copy", { text: emails(arr) })}</div>` : "";
+  return `<article class="card soft"><h3>Started but not registered (${list.length})</h3>
+    <p class="small muted">They drop off this list once they finish. Send each group its own reminder.</p>
+    ${group(neverOpened, "Never opened the sign-in email", "They asked for the email but never used it. Usually it landed in spam, or they stopped waiting.", "asked", msgEmail)}
+    ${group(stopped, "Signed in, but didn't fill in their details", "They got in but stopped at the form, often at the home address.", "signed in", msgDetails)}
+  </article>`;
 }
 
 function peopleTab(S) {
