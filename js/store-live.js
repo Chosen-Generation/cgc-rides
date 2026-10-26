@@ -141,7 +141,8 @@ export async function createLiveStore(config, { createClient } = {}) {
         from("team_log").select("*").order("at", { ascending: false }).limit(50),
       ]);
       // These need the 21 Oct database update; until then, empty.
-      const [ur, pp] = await Promise.all([sb.rpc("unregistered_people"), sb.rpc("push_people")]);
+      const [ur, pp, si] = await Promise.all([sb.rpc("unregistered_people"), sb.rpc("push_people"),
+        from("signup_issues").select("*").gte("at", new Date(Date.now() - 30 * 86400000).toISOString()).order("at", { ascending: false }).limit(300)]);
       for (const r of [pr, rq, wk, pl, as, wl, al, cl]) fail(r);
       // Last-minute requests need the 20 Oct (afternoon) database update; until then, there are none.
       const helpRequests = hr.error || ha.error ? [] : hr.data.map((h) => ({
@@ -169,9 +170,12 @@ export async function createLiveStore(config, { createClient } = {}) {
         // Team changes need the 20 Oct (evening) database update; until then, none.
         teamLog: tl.error ? [] : tl.data.map((t) => ({ at: t.at, actorName: t.actor_name, targetName: t.target_name, change: t.change })),
         unregistered: ur.error ? [] : ur.data.map((u) => ({ email: u.email, signedUpAt: u.signed_up_at, lastSignInAt: u.last_sign_in_at })),
+        signupIssues: si.error ? [] : si.data.map((x) => ({ at: x.at, email: x.email, category: x.category, message: x.message, role: x.role })),
         pushPeople: pp.error ? [] : pp.data.map((x) => (typeof x === "string" ? x : x.push_people)),
       };
     },
+    /** Notes why someone's sign-up form couldn't be saved (for leaders). Never throws. */
+    async logSignupIssue(category, message, role) { try { await sb.rpc("log_signup_issue", { p_category: category, p_message: message, p_role: role || null }); } catch (_) {} },
     // ---- phone notifications
     async savePushSub({ endpoint, p256dh, auth, device }) { await rpc("save_push_sub", { p_endpoint: endpoint, p_p256dh: p256dh, p_auth: auth, p_device: device }); },
     async removePushSub(endpoint) { await rpc("remove_push_sub", { p_endpoint: endpoint }); },

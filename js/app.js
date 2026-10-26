@@ -627,13 +627,31 @@ async function onSubmit(form) {
       S.editing = null; S.formDraft = null; await reload(); say("Saved." + warning); return;
     }
     const registering = !S.me;
-    const { patch } = await checkProfile(raw, S.me || {}, { strict: true });
-    if (!registering) delete patch.role;
-    S.me = await store.saveMyProfile(patch);
+    let patch;
+    try {
+      ({ patch } = await checkProfile(raw, S.me || {}, { strict: true }));
+      if (!registering) delete patch.role;
+      S.me = await store.saveMyProfile(patch);
+    } catch (err) {
+      // Note what stopped a new person (no personal details), so leaders can make that step easier.
+      if (registering) store.logSignupIssue?.(issueCategory(err.message), err.message, raw.role);
+      throw err;
+    }
     S.formDraft = null;
     if (registering) { S.tab = null; S.regRole = null; }
     await reload(); say(registering ? `You're registered. Your address is confirmed${patch.neighbourhood ? ` (${patch.neighbourhood})` : ""}.` : "Saved.");
   }
+}
+
+/** Which part of the sign-up form a problem was about. */
+function issueCategory(msg) {
+  const m = String(msg || "").toLowerCase();
+  if (/postal/.test(m)) return "Postal code";
+  if (/phone/.test(m)) return "Phone number";
+  if (/address|house|street|pin|saskatoon|map/.test(m)) return "Home address";
+  if (/name/.test(m)) return "Name";
+  if (/network|fetch|connection|internet|failed to|timeout|try again/.test(m)) return "Connection";
+  return "Other";
 }
 
 async function copyText(text) {

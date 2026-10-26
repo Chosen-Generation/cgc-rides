@@ -499,3 +499,15 @@ test("a home can be saved with a pin the person placed; unknown sources are refu
   } finally { await db.exec("reset role"); }
   assert.equal((await q("select geo_source from profiles where user_id=$1", [u]))[0].geo_source, "pin");
 });
+
+test("sign-up problems: anyone signed in can note their own; only leaders can read them", async () => {
+  const u = "00000000-0000-0000-0000-0000000001d1";
+  await db.query("insert into auth.users (id,email) values ($1,'newbie@example.com')", [u]);
+  await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub','${u}',false), set_config('request.jwt.claim.email','newbie@example.com',false);`);
+  try {
+    await db.query("select log_signup_issue('Home address', 'We couldn''t find that exact house.', 'rider')");
+    assert.equal((await q("select * from signup_issues")).length, 0); // can't read them back
+  } finally { await db.exec("reset role"); }
+  const rows = await as("leader", () => q("select email, category, role from signup_issues"));
+  assert.deepEqual(rows.map((r) => ({ ...r })), [{ email: "newbie@example.com", category: "Home address", role: "rider" }]);
+});
