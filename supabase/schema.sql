@@ -839,6 +839,39 @@ end $$;
 drop trigger if exists push_on_new_driver_trg on profiles;
 create trigger push_on_new_driver_trg after insert or update of driver_status on profiles for each row execute function push_on_new_driver();
 
+-- A new rider registers -> leaders. (Riders a leader adds by phone have no sign-in, so they're skipped.)
+create or replace function push_on_new_rider() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  if new.role = 'rider' and new.user_id is not null then
+    perform push_to_leaders('New rider registered',
+      new.full_name || ' signed up for rides' || coalesce(' (' || nullif(new.neighbourhood, '') || ')', '') || '. See them in People.', 'rider-' || new.id);
+  end if;
+  return new;
+end $$;
+drop trigger if exists push_on_new_rider_trg on profiles;
+create trigger push_on_new_rider_trg after insert on profiles for each row execute function push_on_new_rider();
+
+-- Someone asks for a ride (or asks again after cancelling) -> leaders. Not when a leader adds it.
+-- One notification per service day: each new one replaces the last on the phone and gives the total.
+create or replace function push_on_ride_request() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare nm text; total int; people int;
+begin
+  if new.status = 'requested' and (tg_op = 'INSERT' or old.status = 'cancelled') and not is_leader() then
+    select full_name into nm from profiles where id = new.rider_id;
+    select count(*), coalesce(sum(1 + extra_people), 0) into total, people from ride_requests where sunday = new.sunday and status = 'requested';
+    perform push_to_leaders('New ride request',
+      split_part(nm, ' ', 1) || case when new.extra_people > 0 then ' (+' || new.extra_people || ')' else '' end
+        || ' asked for a ride for ' || to_char(new.sunday, 'FMDay, FMMonth FMDD') || '. '
+        || total || case when total = 1 then ' request' else ' requests' end || ' (' || people || case when people = 1 then ' seat' else ' seats' end || ') so far.',
+      'requests-' || new.sunday);
+  end if;
+  return new;
+end $$;
+drop trigger if exists push_on_ride_request_trg on ride_requests;
+create trigger push_on_ride_request_trg after insert or update of status on ride_requests for each row execute function push_on_ride_request();
+
 -- Used only by the send-push Edge Function (service role): takes the waiting messages, marks them
 -- sent, and returns one row per device. Messages older than a day are dropped, not sent late.
 create or replace function claim_push()
