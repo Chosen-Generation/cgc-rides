@@ -10,9 +10,9 @@ import { confirmAddress, suggestAddresses, refineSuggestions, normalizePhone, no
 import { driverIssue } from "./matching.js";
 import { draftPlan, recompute, applyMove, reassignDriver, sundayPeople, rankHelpers } from "./planner.js";
 import { driverAvailable, CONSENT_WORDING, isDriver } from "./models.js";
-import { shell, landingView, signInView, demoPickerView, roleView, esc, remindGroups, REMIND } from "./views.js";
+import { shell, landingView, signInView, demoPickerView, roleView, esc, remindGroups, REMIND, notAskedYet } from "./views.js";
 import { lastMinuteBroadcast } from "./texts.js";
-import { setServices, upcomingDays, configFor, serviceFor } from "./services.js";
+import { setServices, upcomingDays, configFor, serviceFor, dayLabel as dayLabelFor, cutoffLabel as cutoffFor } from "./services.js";
 import { DEMO_CHURCH } from "./demo-data.js";
 import { pushState, turnOn, turnOff, resync, askPermission } from "./push.js";
 import { approvalPings } from "./notify.js";
@@ -318,7 +318,7 @@ const actions = {
   "signin-reset"() { S.signInSent = ""; },
   async viewas(d) { store.viewAs(d.id); S.session = store.session(); S.tab = null; S.sunday = null; S.planView = null; S.editing = null; await reload(); say(`Viewing as ${S.me?.name}`); },
   async signout() { await store.signOut(); S.session = null; S.me = null; S.screen = "landing"; S.tab = null; S.planView = null; S.regRole = null; },
-  tab(d) { S.tab = d.tab; S.editing = null; S.formDraft = null; S.remindResult = null; if (S.pushNote?.kind !== "wait") S.pushNote = null; },
+  tab(d) { S.tab = d.tab; S.editing = null; S.formDraft = null; S.remindResult = null; S.rideRemindResult = null; if (S.pushNote?.kind !== "wait") S.pushNote = null; },
   async "pick-sunday"(d) {
     if (d.sunday === S.sunday) return;
     if (S.planView?.dirty && S.planView.edited && !confirm("You have unsaved changes to this plan. Switch anyway?")) return;
@@ -493,6 +493,17 @@ const actions = {
     } else {
       S.pushNote = { kind: "warn", text: "The question was closed before you answered, so notifications aren't on yet. Tap Allow notifications again, then tap Allow. Still nothing? Tap the 🔒 icon beside the web address → Permissions → Notifications → Allow." };
     }
+  },
+  async "ride-remind"(d) {
+    const list = notAskedYet(S, d.day).filter((p) => p.userId);
+    if (!list.length) return;
+    const label = dayLabelFor(d.day);
+    if (!confirm(`Send "Do you need a ride on ${label}?" to ${list.length} ${list.length === 1 ? "rider" : "riders"}?`)) return;
+    const sent = await store.queuePush(list.map((p) => ({ profileId: p.id, title: `Need a ride on ${label}?`,
+      body: `Tap "I need a ride" in the app by ${cutoffFor(d.day)}. Signing up doesn't book a ride by itself.`, tag: `ask-${d.day}` })));
+    await store.flushPush();
+    const on = new Set(S.data.pushPeople || []);
+    S.rideRemindResult = { day: d.day, sent: Number(sent) || 0, others: list.filter((p) => !on.has(p.id)) };
   },
   async remind(d) {
     const list = remindGroups(S)[d.group] || [];
@@ -669,7 +680,10 @@ async function onSubmit(form) {
     }
     S.formDraft = null;
     if (registering) { S.tab = null; S.regRole = null; }
-    await reload(); say(registering ? `You're registered. Your address is confirmed${patch.neighbourhood ? ` (${patch.neighbourhood})` : ""}.` : "Saved.");
+    await reload(); say(registering
+      ? (patch.role === "driver" ? `You're registered. Your address is confirmed${patch.neighbourhood ? ` (${patch.neighbourhood})` : ""}.`
+        : "You're registered! One more step: tap \"I need a ride\" under each Sunday you need a ride.")
+      : "Saved.");
   }
 }
 
