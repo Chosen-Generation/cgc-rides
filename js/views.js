@@ -261,7 +261,14 @@ export function riderView(S) {
     }
     return `<article class="card">${dayHeading(sunday)}${body}</article>`;
   }).join("");
+  // Registering doesn't book a ride: nudge them for the next open service they haven't asked for.
+  const nextOpen = S.sundays.find((d) => !serviceFor(d).cancelled && !isClosed(d, S.now));
+  const askedNext = nextOpen && S.rides.some((r) => r.sunday === nextOpen && r.status !== "cancelled");
+  const nudge = nextOpen && !askedNext && !S.rides.some((r) => r.sunday === nextOpen)
+    ? banner("info", `<strong>Need a ride on ${esc(dayLabel(nextOpen, { long: true }))}?</strong> Signing up doesn't book a ride by itself. Tap <strong>I need a ride</strong> under that day below, by ${esc(cutoffLabel(nextOpen))}. Do this for each Sunday you need a ride.`)
+    : "";
   return `<section><h2>Hi ${esc(firstName(me.name))}</h2>
+    ${nudge}
     ${!isConfirmed(me) ? banner("warn", `<strong>Please confirm your home address.</strong> We can only arrange a ride once your address is confirmed on the map. ${btn("Confirm my address", "tab", { tab: "details" }, "primary")}`) : ""}
     <label class="check card soft"><input type="checkbox" data-act-change="weekly" ${me.weeklyCheckin ? "checked" : ""}> <span><strong>Check in with me every week.</strong><br><span class="small muted">We'll ask “Do you need a ride this Sunday?” If you don't answer, we won't assume you do.</span></span></label>
     ${cards}${consentBlock(S)}</section>`;
@@ -554,6 +561,44 @@ function addressReminderBox(S) {
   return html + `</article>`;
 }
 
+// Riders who haven't asked for the next open service: remind them (notification + a text to copy).
+export function nextOpenService(S) {
+  return (S.sundays || []).find((d) => !serviceFor(d).cancelled && !isClosed(d, S.now || new Date()));
+}
+export function notAskedYet(S, day = nextOpenService(S)) {
+  if (!day) return [];
+  const asked = new Set((S.data.requests || []).filter((r) => r.sunday === day).map((r) => r.riderId)); // includes cancelled: they chose
+  return (S.data.profiles || []).filter((p) => p.role === "rider" && !asked.has(p.id));
+}
+export function rideReminderText(S, day) {
+  return `Hi! Do you need a ride to church on ${dayLabel(day, { long: true })} (service at ${timeLabel(day)})? 🚗
+
+Signing up doesn't book a ride by itself, so please ask for each Sunday you need one:
+1. Open ${S.appUrl || "the app"}
+2. Sign in with your email (check spam if the email doesn't come).
+3. Under ${dayLabel(day)}, tap "I need a ride", by ${cutoffLabel(day)}.
+
+On Saturday evening you'll see your driver and what time to be ready. Haven't signed up yet? Use the same link to sign up first.
+
+Thank you!`;
+}
+function rideReminderBox(S) {
+  const day = nextOpenService(S);
+  if (!day) return "";
+  const list = notAskedYet(S, day);
+  const asked = (S.data.requests || []).filter((r) => r.sunday === day && r.status !== "cancelled").length;
+  const app = list.filter((p) => p.userId), phoned = list.filter((p) => !p.userId);
+  const on = new Set(S.data.pushPeople || []);
+  const r = S.rideRemindResult;
+  return `<article class="card soft"><h3>Ride requests for ${esc(dayLabel(day))}</h3>
+    <p class="small">${asked} ${asked === 1 ? "rider has" : "riders have"} asked so far. <strong>${list.length} registered ${list.length === 1 ? "rider hasn't" : "riders haven't"}</strong> asked yet (requests close ${esc(cutoffLabel(day))}).</p>
+    ${app.length ? `<p class="small muted">${app.map((p) => esc(firstName(p.name)) + (on.has(p.id) ? " 🔔" : "")).join(", ")}</p>
+      <div class="row wrap">${btn(`Send reminder (${app.filter((p) => on.has(p.id)).length} by notification)`, "ride-remind", { day }, "primary")}${btn("Copy reminder message", "copy", { text: rideReminderText(S, day) })}${btn("Copy their emails", "copy", { text: app.map((p) => p.email).filter(Boolean).join(", ") })}${btn("Copy their phone numbers", "copy", { text: app.map((p) => p.phone).filter(Boolean).join(", ") })}</div>` : ""}
+    ${phoned.length ? `<p class="small">Added by phone (no app), so call them: ${phoned.map((p) => `${esc(p.name)} ${esc(p.phone || "")}`).join(" · ")}</p>` : ""}
+    ${r && r.day === day ? `<div class="banner ok"><p>Sent as a notification to ${r.sent}. ${r.others.length ? `Text the other ${r.others.length}: ${r.others.map((p) => `${esc(p.name)} ${esc(p.phone || "")}`).join(" · ")}` : ""}</p></div>` : ""}
+  </article>`;
+}
+
 // Drivers who signed up but aren't cleared yet: they show their licence and insurance to a leader
 // in person (nothing is copied or stored), then a leader ticks the boxes and sets them to cleared.
 export function driverCheckMessage(S) {
@@ -649,7 +694,7 @@ function peopleTab(S) {
     return `<li class="personrow"><div><strong>${esc(d.name)}</strong> ${st}<br><span class="small muted">${esc(d.seats)} seats · ${esc(d.neighbourhood || "no area")} · ${checkNote} · licence ${d.licenceOk ? "✓" : "–"} · insurance ${d.insuranceOk ? "✓" : "–"}${pushMark(d)}</span></div>${btn("Edit / review", "edit", { id: d.id })}</li>`;
   };
   const rRow = (r) => `<li class="personrow"><div><strong>${esc(r.name)}</strong> ${riderBadges(r)}<br><span class="small muted">${esc(r.neighbourhood || "")} · ${r.textsConsentAt ? "texts OK" : "no text consent"}${r.weeklyCheckin ? " · weekly check-in" : ""}${pushMark(r)}</span></div>${btn("Edit", "edit", { id: r.id })}</li>`;
-  return `${teamSection(S)}${driverChecksBox(S)}${unregisteredBox(S)}${addressReminderBox(S)}<div class="row wrap">${btn("Add a rider who phoned in", "edit", { id: "new" }, "primary")}</div>
+  return `${teamSection(S)}${rideReminderBox(S)}${driverChecksBox(S)}${unregisteredBox(S)}${addressReminderBox(S)}<div class="row wrap">${btn("Add a rider who phoned in", "edit", { id: "new" }, "primary")}</div>
     <h3>Drivers (${drivers.length})</h3><ul class="plain">${drivers.map(dRow).join("") || "<li class='muted'>No drivers yet.</li>"}</ul>
     <h3>Riders (${riders.length})</h3><ul class="plain">${riders.map(rRow).join("") || "<li class='muted'>No riders yet.</li>"}</ul>
     <h3>Keep a copy</h3>
