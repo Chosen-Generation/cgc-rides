@@ -147,6 +147,7 @@ test("live store: calls the right tables and functions (fake client; not a real 
 
 test("demo: a rider asks with people coming along; the leader can agree to a split; drivers see their share", async () => {
   const c = await leaderCtx();
+  await c.store.setVanDriver(c.sunday, null); // no church van this day: only cars
   c.store.viewAs("r-lydia");
   await c.store.requestRide(c.sunday, { extraPeople: 6, canSplit: false, note: "Bringing my family" });
   c.store.viewAs("leader");
@@ -230,4 +231,42 @@ test("team: the supervisor makes leaders (two at most), moves them back, and han
   assert.equal(d.profiles.find((p) => p.id === "r-isaac").isSupervisor, true);
   assert.deepEqual(d.teamLog.map((t) => t.change).reverse(), [
     "made Grace Adeyemi leader", "made Isaac Moyo assistant leader", "made Grace Adeyemi driver", "handed the supervisor role to Isaac Moyo"]);
+});
+
+test("church van: used only with a driver; their car stays home; it fills first; start from home", async () => {
+  const c = await leaderCtx();
+  const data = await c.store.leaderData();
+  const p = await draftPlan({ data, sunday: c.sunday, church, config: CONFIG, fetchFn: offline });
+  const inVan = p.assignments.filter((a) => a.driverId === "van");
+  assert.ok(inVan.length >= 2, "the van takes riders");
+  assert.ok(!p.assignments.some((a) => a.driverId === "d-samuel"), "the van driver's own car isn't used");
+  assert.ok(p.excludedDrivers.some((e) => e.driverId === "d-samuel" && /church van/.test(e.reason)));
+  // The van's route starts at church: it leaves before its first pickup by the church-to-rider time.
+  const trip = p.trips.find((t) => t.driverId === "van" && t.trip === 1);
+  assert.ok(trip.departMin <= trip.stops[0].pickupMin);
+  // No van driver: the van isn't used, Samuel's car is.
+  await c.store.setVanDriver(c.sunday, null);
+  const data2 = await c.store.leaderData();
+  const p2 = await draftPlan({ data: data2, sunday: c.sunday, church, config: CONFIG, fetchFn: offline });
+  assert.ok(!p2.assignments.some((a) => a.driverId === "van"));
+  assert.ok(p2.excludedDrivers.some((e) => e.driverId === "van" && /No van driver/.test(e.reason)));
+  // Starting from the driver's home: the van's start point is their house.
+  await c.store.setVanDriver(c.sunday, "d-grace", "home");
+  const { withVan } = await import("../js/van.js");
+  const data3 = await c.store.leaderData();
+  const van = withVan(data3.profiles.filter((x) => x.role === "driver"), data3, c.sunday).find((d) => d.isVehicle);
+  const grace = data3.profiles.find((x) => x.id === "d-grace");
+  assert.deepEqual([van.lat, van.lng, van.vanStart], [grace.lat, grace.lng, "home"]);
+  // Approving a plan with the van needs a van driver.
+  await c.store.setVanDriver(c.sunday, null);
+  await assert.rejects(() => c.store.savePlan(c.sunday, "approved", {}, inVan, []), /Choose who drives the church van/);
+});
+
+test("church van notifications go to the person driving it", async () => {
+  const { approvalPings } = await import("../js/notify.js");
+  const people = new Map([["van", { id: "van", isVehicle: true, name: "Samuel Boateng (church van)", vanDriverId: "d-samuel", vanStart: "church" }]]);
+  const pings = approvalPings({ before: null, after: { assignments: [{ riderId: "r1", driverId: "van", trip: 1, pickupMin: 620, departMin: 600, seats: 1 }], waitlist: [] }, sunday: "2026-11-08", profilesById: people });
+  assert.deepEqual(pings.map((x) => x.profileId), ["r1", "d-samuel"]);
+  assert.match(pings[0].body, /^Samuel \(church van\) will pick you up at 10:20 AM/);
+  assert.match(pings[1].body, /^1 person to pick up in the church van .* Leave the church \(with the van\) by 10:00 AM\./);
 });

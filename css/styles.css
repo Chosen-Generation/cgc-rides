@@ -108,3 +108,7 @@ summary{cursor:pointer;font-weight:600}
 .pushnote.ok{background:#DCEBDD;color:#1f5a2c}
 .pushnote.warn{background:#FBEFD5;color:#6b4a00}
 .pushnote.err{background:#F7DCDC;color:#7a1f1f}
+.vanlog{border:1px dashed var(--line);border-radius:12px;padding:.8rem;margin:.6rem 0;background:var(--paper)}
+.vanlog h4{margin:0 0 .4rem}
+.vanloglist li{padding:.45rem 0;border-bottom:1px solid var(--line)}
+textarea{font:inherit}

@@ -6,6 +6,7 @@ import { buildTravel } from "./routing.js";
 import { asDriver, isDriver, driverAvailable } from "./models.js";
 import { toMin } from "./dates.js";
 import { isConfirmed } from "./geo.js";
+import { withVan } from "./van.js";
 
 export function matchOptions(config) {
   return {
@@ -31,7 +32,7 @@ export function sundayPeople(data, sunday) {
     .filter((r) => r.sunday === sunday && r.status !== "cancelled")
     .map((r) => ({ ...byId.get(r.riderId), rideHome: r.rideHome, requestNote: r.note, extraPeople: r.extraPeople || 0, canSplit: !!r.canSplit }))
     .filter((r) => r.id);
-  const drivers = data.profiles.filter(isDriver).map((p) => asDriver(located(p), data.weeks, sunday));
+  const drivers = withVan(data.profiles.filter(isDriver).map((p) => asDriver(located(p), data.weeks, sunday)), data, sunday);
   return { riders, drivers };
 }
 
@@ -142,7 +143,7 @@ export function groupCars(assignments, drivers) {
 export async function rankHelpers({ data, sunday, church, config, rider, seats = 1, assignments = [], fetchFn }) {
   if (!church) throw new Error("The church location isn't set.");
   if (!isConfirmed(rider)) throw new Error("This rider's address isn't confirmed, so we can't work out who is closest. Confirm the address first.");
-  const drivers = data.profiles.filter(isDriver).filter((d) => d.status === "cleared" && isConfirmed(d) && d.seats > 0);
+  const drivers = data.profiles.filter(isDriver).filter((d) => !d.isVehicle && d.status === "cleared" && isConfirmed(d) && d.seats > 0);
   const rn = { id: "R:help", lat: rider.lat, lng: rider.lng };
   const cn = { id: "church", lat: church.lat, lng: church.lng };
   const node = (d) => ({ id: `D:${d.id}`, lat: d.lat, lng: d.lng });

@@ -36,9 +36,9 @@ export function makeDemoState(now = new Date()) {
   const profiles = [
     base("leader", "Transport Leader (demo)", "Nutana", { role: "leader", isSupervisor: true, leaderTitle: "Supervisor", phone: "306-555-0100", gender: "F" }),
     driver("d-grace", "Grace Adeyemi", "Stonebridge", { gender: "F", seats: 4, drivesEveryWeek: true, vehicle: "Silver minivan", textsConsentAt: now.toISOString() }),
-    driver("d-daniel", "Daniel Okafor", "Evergreen", { gender: "M", seats: 3, drivesEveryWeek: true, vehicle: "Grey SUV" }),
+    driver("d-daniel", "Daniel Okafor", "Evergreen", { gender: "M", seats: 3, drivesEveryWeek: true, vehicle: "Grey SUV", vanWilling: true }),
     driver("d-ruth", "Ruth Mensah", "Confederation Park", { gender: "F", seats: 3, secondTrip: true, vehicle: "Blue sedan" }),
-    driver("d-samuel", "Samuel Boateng", "Lawson Heights", { gender: "M", seats: 2, drivesEveryWeek: true, vehicle: "Red hatchback", policeCheckExpiry: inDays(12) }),
+    driver("d-samuel", "Samuel Boateng", "Lawson Heights", { gender: "M", seats: 2, drivesEveryWeek: true, vehicle: "Red hatchback", policeCheckExpiry: inDays(12), vanWilling: true }),
     driver("d-esther", "Esther Williams", "Nutana", { gender: "F", seats: 3, vehicle: "White van", status: "suspended" }), // paused by the leader: gets no riders
     base("d-new", "Joel Anderson", "Briarwood", { role: "driver", status: "pending", gender: "M", seats: 4, vehicle: "Black truck (crew cab)" }),
     base("r-mary", "Mary Johnson", "Evergreen", { gender: "F", priority: true, weeklyCheckin: true, notes: "Uses a walker (folds into the trunk)", textsConsentAt: now.toISOString() }),
@@ -52,6 +52,9 @@ export function makeDemoState(now = new Date()) {
     base("r-kofi", "Kofi Asante", "Westmount", { gender: "M" }),
     base("r-naomi", "Naomi Clarke", "Varsity View", { gender: "F" }),
     base("r-isaac", "Isaac Moyo", "Avalon", { gender: "M", notes: "No saved map location; leader must set one" }),
+    // The church van: a vehicle, not a person. Parked at the (demo) church.
+    { ...base("van", "Church van", "Nutana", { role: "driver", status: "cleared", seats: 14, secondTrip: true, drivesEveryWeek: true, vehicle: "Church van", licenceOk: true, insuranceOk: true }),
+      userId: null, email: null, phone: null, isVehicle: true, address: "At the church", lat: DEMO_CHURCH.lat, lng: DEMO_CHURCH.lng, geoSource: "manual" },
   ];
 
   const mk = (riderId, sunday, rideHome = false, note = null) => ({ id: `q-${riderId}-${sunday}`, riderId, sunday, rideHome, note, status: "requested" });
@@ -65,9 +68,12 @@ export function makeDemoState(now = new Date()) {
   // Ruth (second trip) is free the first Sunday; Daniel is away the second.
   const weeks = [
     { driverId: "d-ruth", sunday: first, available: true },
+    { driverId: "d-samuel", sunday: first, available: true, vanOk: true },
     { driverId: "d-daniel", sunday: sundays[1], available: false, note: "Away" },
   ];
-  return { sundays, profiles, requests, weeks, plans: {}, alerts: [], consentLog: [], help: [], services: [], teamLog: [], pushLog: [],
+  // Samuel drives the church van on the first Sunday.
+  const vanShifts = [{ sunday: first, driverId: "d-samuel", startFrom: "church" }];
+  return { sundays, profiles, requests, weeks, vanShifts, plans: {}, alerts: [], consentLog: [], help: [], services: [], teamLog: [], pushLog: [],
     signupIssues: [{ at: inDays(-1), email: "vanessa.example@demo.invalid", category: "Home address", message: "We couldn't find that exact house.", role: "rider" }],
     unregistered: [{ email: "vanessa.example@demo.invalid", signedUpAt: inDays(-1), lastSignInAt: inDays(-1) }, { email: "tobi.example@demo.invalid", signedUpAt: inDays(-1), lastSignInAt: null }] };
 }

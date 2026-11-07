@@ -581,3 +581,111 @@ test("a driver gets a notification when a leader approves them", async () => {
   assert.equal(rows[0].profile_id, id);
   assert.match(rows[0].body, /^Thank you, Kemi! You can now be given riders\./);
 });
+
+test("church van: set up, choose its driver and start, plan with it, cancellations", async () => {
+  const ids = {};
+  for (const [k, uid, name, role] of [["vd", "00000000-0000-0000-0000-0000000002a1", "Vic Vandriver", "driver"], ["vr", "00000000-0000-0000-0000-0000000002a2", "Rae Vanrider", "rider"]]) {
+    await db.query("insert into auth.users (id,email) values ($1,$2)", [uid, `${k}@example.com`]);
+    await db.query("insert into profiles (user_id,full_name,role,seats,driver_status,phone,home_address,lat,lng,geo_source) values ($1,$2,$3,4,$4,'306-555-0199','5 Van St',52.13,-106.62,'verified')", [uid, name, role, role === "driver" ? "cleared" : "none"]);
+    ids[k] = (await q("select id from profiles where user_id=$1", [uid]))[0].id;
+    U[k] = uid;
+  }
+  // Only leaders set up the van; seats 1-14.
+  await assert.rejects(() => as("vr", () => q("select set_church_van(14,'Church',52.1,-106.6)")), /Only leaders/);
+  await assert.rejects(() => as("leader", () => q("select set_church_van(20,'Church',52.1,-106.6)")), /between 1 and 14/);
+  const [{ set_church_van: van }] = await as("leader", () => q("select set_church_van(12,'601 Eastlake Ave',52.1196,-106.6592)"));
+  await as("leader", () => q("select set_church_van(14,'601 Eastlake Ave',52.1196,-106.6592)"));
+  const [v] = await q("select is_vehicle, role, driver_status, seats, second_trip, user_id from profiles where id=$1", [van]);
+  assert.deepEqual({ ...v }, { is_vehicle: true, role: "driver", driver_status: "cleared", seats: 14, second_trip: true, user_id: null });
+  assert.equal((await q("select count(*)::int n from profiles where is_vehicle"))[0].n, 1);
+
+  // Only a cleared driver can drive it.
+  const day = sundayInDays(14);
+  await assert.rejects(() => as("leader", () => q("select set_van_driver($1,$2)", [day, ids.vr])), /cleared driver/);
+
+  // A plan with the van: approving needs a van driver.
+  await db.query("insert into ride_requests (rider_id, sunday) values ($1,$2)", [ids.vr, day]);
+  const plan = (status) => as("leader", () => q("select save_plan($1,$2,'{}'::jsonb,$3::jsonb,'[]'::jsonb)", [day, status,
+    JSON.stringify([{ riderId: ids.vr, driverId: van, trip: 1, order: 0, seats: 1, pickupMin: 640, readyByMin: 635, arriveMin: 690, departMin: 625 }])]));
+  await assert.rejects(() => plan("approved"), /Choose who drives the church van/);
+  await assert.rejects(() => as("leader", () => q("select set_van_driver($1,$2,'garage')", [day, ids.vd])), /church or from home/);
+  await as("leader", () => q("select set_van_driver($1,$2,'home')", [day, ids.vd]));
+  await plan("approved");
+
+  // The rider sees who drives the van, and the ride home.
+  const [mine] = await as("vr", () => q("select * from my_rides() where sunday=$1", [day]));
+  assert.equal(mine.status, "seated");
+  assert.equal(mine.driver_name, "Vic Vandriver");
+  assert.equal(mine.driver_phone, "306-555-0199");
+  assert.equal(mine.vehicle, "Church van");
+  assert.equal(mine.in_van, true);
+  // The van driver gets the van's pickups (and where to start); nobody else does.
+  const route = await as("vd", () => q("select rider_name, in_van, van_start from my_route($1)", [day]));
+  assert.deepEqual(route.map((r) => ({ ...r })), [{ rider_name: "Rae Vanrider", in_van: true, van_start: "home" }]);
+  assert.equal((await as("d1", () => q("select * from my_route($1)", [day]))).length, 0);
+  // Choosing nobody means the van isn't used that day.
+  const day2 = sundayInDays(21);
+  await as("leader", () => q("select set_van_driver($1,$2)", [day2, ids.vd]));
+  await as("leader", () => q("select set_van_driver($1,null)", [day2]));
+  assert.equal((await q("select count(*)::int n from van_shifts where sunday=$1", [day2]))[0].n, 0);
+
+  // A rider cancels from the van: the van driver is notified.
+  await as("vd", () => q("select save_push_sub('https://push.example.com/vic','k','a')"));
+  await db.exec("delete from push_queue");
+  await as("vr", () => db.query("update ride_requests set status='cancelled' where rider_id=$1 and sunday=$2", [ids.vr, day]));
+  const pq = await q("select profile_id, title from push_queue where title = 'Change to your pickups'");
+  assert.deepEqual(pq.map((r) => r.profile_id), [ids.vd]);
+  assert.match((await q("select message from alerts where rider_id=$1 order by created_at desc limit 1", [ids.vr]))[0].message, /They were in the church van \(pickup/);
+
+  // The van driver can't make it: the van has no driver and the leaders are told.
+  await as("vd", () => q("select driver_cant_make_it($1)", [day]));
+  assert.equal((await q("select driver_id from van_shifts where sunday=$1", [day]))[0].driver_id, null);
+  assert.match((await q("select message from alerts where kind='driver_cancel' and driver_id=$1", [ids.vd]))[0].message, /can't drive the church van/);
+});
+
+test("van logbook: only the day's van driver; damage and unlogged kilometres are flagged with the previous driver", async () => {
+  const day = sundayInDays(28), day2 = sundayInDays(35);
+  const vd = (await q("select id from profiles where full_name='Vic Vandriver'"))[0].id;
+  const d2 = (await q("select id from profiles where user_id=$1", [U.newdrv]))[0].id; // Kemi, cleared earlier
+  await as("leader", () => q("select set_van_driver($1,$2)", [day, vd]));
+  await as("leader", () => q("select set_van_driver($1,$2)", [day2, d2]));
+  await db.exec("delete from alerts where kind='van'");
+  // Someone who isn't driving the van that day can't log.
+  await assert.rejects(() => as("newdrv", () => q("select van_log_start($1,1000,'full','{}'::jsonb)", [day])), /Only the person driving the church van/);
+  // Vic: before and after.
+  const [{ van_log_start: l1 }] = await as("vd", () => q("select van_log_start($1,10000,'full','{\"tires\":true}'::jsonb)", [day]));
+  await assert.rejects(() => as("vd", () => q("select van_log_start($1,10000,'full','{}'::jsonb)", [day])), /already started/);
+  await assert.rejects(() => as("vd", () => q("select van_log_end($1,9990,'3/4')", [l1])), /can't be less/);
+  await assert.rejects(() => as("vd", () => q("select van_log_end($1,10040,'3/4',true)", [l1])), /how much the fuel cost/);
+  await as("vd", () => q("select van_log_end($1,10042,'full',true,40.5,62.30,false)", [l1]));
+  // Kemi next week finds a scratch, and the van has 15 extra km.
+  const before = await as("newdrv", () => q("select * from my_van_log($1)", [day2]));
+  assert.equal(before[0].last_driver, "Vic Vandriver");
+  assert.equal(before[0].last_end_km, 10042);
+  await assert.rejects(() => as("newdrv", () => q("select van_log_start($1,10057,'full','{}'::jsonb,true,'')", [day2])), /Describe the damage/);
+  await as("newdrv", () => q("select van_log_start($1,10057,'full','{}'::jsonb,true,'Scratch on the back left door')", [day2]));
+  const msgs = (await q("select message from alerts where kind='van' order by created_at, message")).map((r) => r.message);
+  assert.ok(msgs.some((m) => /bought fuel .*\$62\.30.*receipt/.test(m)), "receipt reminder");
+  assert.ok(msgs.some((m) => /noticed damage .*BEFORE driving: Scratch on the back left door\. It was last driven by Vic Vandriver .*ended at 10042 km\), who reported no damage\./.test(m)), msgs.join("\n"));
+  assert.ok(msgs.some((m) => /started at 10057 km, but the last trip \(Vic Vandriver.*ended at 10042 km\. 15 km were driven without a log entry\./.test(m)), "km gap");
+  // The receipt can be marked given later; leaders see the whole log.
+  await as("vd", () => q("select van_log_receipt($1)", [l1]));
+  const log = await as("leader", () => q("select driver_name, start_km, end_km, fuel_cost, receipt_given from van_logs order by before_at"));
+  assert.deepEqual(log.map((r) => ({ ...r, fuel_cost: r.fuel_cost == null ? null : Number(r.fuel_cost) })), [
+    { driver_name: "Vic Vandriver", start_km: 10000, end_km: 10042, fuel_cost: 62.3, receipt_given: true },
+    { driver_name: "Kemi Wheels", start_km: 10057, end_km: null, fuel_cost: null, receipt_given: false },
+  ]);
+  assert.equal((await as("vr", () => q("select * from van_logs"))).length, 0);
+});
+
+test("drivers can say they're willing to drive the van and offer for a day", async () => {
+  const day = sundayInDays(42);
+  const me = (await q("select id from profiles where full_name='Vic Vandriver'"))[0].id;
+  await as("vd", () => db.query("update profiles set van_willing = true where id=$1", [me]));
+  await as("vd", () => db.query("insert into driver_weeks (driver_id, sunday, available, van_ok) values ($1,$2,true,true) on conflict (driver_id, sunday) do update set van_ok = true", [me, day]));
+  // Turning own-car availability off later keeps the van offer.
+  await as("vd", () => db.query("insert into driver_weeks (driver_id, sunday, available) values ($1,$2,false) on conflict (driver_id, sunday) do update set available = excluded.available", [me, day]));
+  const row = await as("leader", () => q("select available, van_ok from driver_weeks where driver_id=$1 and sunday=$2", [me, day]));
+  assert.deepEqual({ ...row[0] }, { available: false, van_ok: true });
+  assert.equal((await q("select van_willing from profiles where id=$1", [me]))[0].van_willing, true);
+});

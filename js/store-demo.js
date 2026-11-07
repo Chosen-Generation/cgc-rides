@@ -55,8 +55,10 @@ export function createDemoStore({ now = () => new Date() } = {}) {
         if (r.status === "cancelled") rows.push({ ...base, status: "cancelled" });
         else if (!mine.length) rows.push({ ...base, status: w ? "waitlisted" : "requested" });
         else for (const a of mine) {
-          const d = byId(a.driverId);
-          rows.push({ ...base, status: "seated", driverName: d.name, driverPhone: d.phone, vehicle: d.vehicle, seats: a.seats ?? 1, trip: a.trip, pickupMin: a.pickupMin, readyByMin: a.readyByMin, arriveMin: a.arriveMin });
+          let d = byId(a.driverId);
+          const inVan = !!d.isVehicle;
+          if (inVan) { const s = (db.vanShifts || []).find((x) => x.sunday === r.sunday && x.driverId); const h = s && byId(s.driverId); d = { ...d, name: h?.name || d.name, phone: h?.phone || null }; }
+          rows.push({ ...base, status: "seated", driverName: d.name, driverPhone: d.phone, vehicle: d.vehicle, seats: a.seats ?? 1, trip: a.trip, pickupMin: a.pickupMin, readyByMin: a.readyByMin, arriveMin: a.arriveMin, inVan });
         }
       }
       return rows;
@@ -105,6 +107,12 @@ export function createDemoStore({ now = () => new Date() } = {}) {
 
     // ---- driver
     async myWeeks() { return db.weeks.filter((w) => w.driverId === me().id).map(fresh); },
+    async setVanOffer(sunday, ok, available) {
+      const m = me();
+      const ex = db.weeks.find((w) => w.driverId === m.id && w.sunday === sunday);
+      if (ex) Object.assign(ex, { vanOk: !!ok });
+      else db.weeks.push({ driverId: m.id, sunday, available: !!available, note: null, vanOk: !!ok });
+    },
     async setAvailability(sunday, available, note = null) {
       const m = me();
       const ex = db.weeks.find((w) => w.driverId === m.id && w.sunday === sunday);
@@ -115,13 +123,17 @@ export function createDemoStore({ now = () => new Date() } = {}) {
       const m = me();
       const plan = db.plans[sunday];
       if (!plan || plan.status !== "approved") return [];
-      return plan.assignments.filter((a) => a.driverId === m.id).sort((a, b) => a.trip - b.trip || a.order - b.order).map((a) => {
+      const shift = (db.vanShifts || []).find((x) => x.sunday === sunday && x.driverId === m.id);
+      const isVan = (id) => !!byId(id)?.isVehicle;
+      return plan.assignments.filter((a) => a.driverId === m.id || (shift && isVan(a.driverId)))
+        .sort((a, b) => isVan(a.driverId) - isVan(b.driverId) || a.trip - b.trip || a.order - b.order).map((a) => {
         const r = byId(a.riderId);
         const q = db.requests.find((x) => x.riderId === r.id && x.sunday === sunday);
         return { trip: a.trip, order: a.order, pickupMin: a.pickupMin, readyByMin: a.readyByMin, arriveMin: a.arriveMin, departMin: a.departMin ?? null,
           riderName: r.name, riderPhone: r.phone, address: r.address, neighbourhood: r.neighbourhood, lat: r.lat, lng: r.lng,
           minor: r.minor,
-          riderNotes: r.notes, requestNote: q?.note ?? null, extraPeople: q?.extraPeople || 0, seats: a.seats ?? 1, partyTotal: 1 + (q?.extraPeople || 0), rideHome: !!q?.rideHome, cancelled: q?.status === "cancelled" };
+          riderNotes: r.notes, requestNote: q?.note ?? null, extraPeople: q?.extraPeople || 0, seats: a.seats ?? 1, partyTotal: 1 + (q?.extraPeople || 0), rideHome: !!q?.rideHome, cancelled: q?.status === "cancelled",
+          inVan: isVan(a.driverId), vanStart: isVan(a.driverId) ? shift?.startFrom || "church" : null };
       }).filter((x) => !x.cancelled);
     },
     async cantMakeIt(sunday, note = null) {
@@ -138,7 +150,7 @@ export function createDemoStore({ now = () => new Date() } = {}) {
     async leaderData() {
       need(isLeader(), "Only the transport leader can see this.");
       return fresh({ profiles: db.profiles, requests: db.requests, weeks: db.weeks, plans: db.plans, alerts: db.alerts, consentLog: db.consentLog, helpRequests: db.help, teamLog: db.teamLog,
-        unregistered: db.unregistered, signupIssues: db.signupIssues, pushPeople: ["d-grace", "r-mary"] });
+        unregistered: db.unregistered, signupIssues: db.signupIssues, vanShifts: db.vanShifts || [], vanLogs: [...(db.vanLogs || [])].reverse(), pushPeople: ["d-grace", "r-mary"] });
     },
 
     // ---- team (same rules as the database: only the supervisor; two leaders besides them at most)
@@ -218,8 +230,72 @@ export function createDemoStore({ now = () => new Date() } = {}) {
         message: `${m.name} said yes: they will pick up ${h.riderName} on ${h.sunday}.`, createdAt: now().toISOString() });
       return "accepted";
     },
+    // ---- church van (same rules as the database)
+    async setChurchVan({ seats, address, lat, lng }) {
+      need(isLeader(), "Only leaders can set up the church van.");
+      need(seats >= 1 && seats <= 14, "Seats must be between 1 and 14 (not counting the driver).");
+      let v = db.profiles.find((p) => p.isVehicle);
+      if (!v) { v = { id: "van", userId: null, name: "Church van", role: "driver", isVehicle: true, status: "cleared", secondTrip: true, drivesEveryWeek: true, vehicle: "Church van", geoSource: "manual", licenceOk: true, insuranceOk: true }; db.profiles.push(v); }
+      Object.assign(v, { seats, address: address || "Church", lat, lng });
+      return v.id;
+    },
+    async setVanDriver(sunday, driverId, startFrom = "church") {
+      need(isLeader(), "Only leaders can choose the van driver.");
+      db.vanShifts = (db.vanShifts || []).filter((s) => s.sunday !== sunday);
+      if (!driverId) return "ok";
+      const d = byId(driverId);
+      need(d && !d.isVehicle && d.status === "cleared", "Only a cleared driver can drive the church van.");
+      db.vanShifts.push({ sunday, driverId, startFrom: startFrom === "home" ? "home" : "church" });
+      return "ok";
+    },
+    // ---- van logbook (same rules as the database)
+    async vanLogStart(sunday, v) {
+      const m = me();
+      need(isLeader() || (db.vanShifts || []).some((s) => s.sunday === sunday && s.driverId === m.id), "Only the person driving the church van that day can fill in its log.");
+      need(v.startKm != null && v.startKm >= 0, "Enter the kilometres shown on the van before you drive.");
+      db.vanLogs = db.vanLogs || [];
+      need(!db.vanLogs.some((l) => l.sunday === sunday && l.driverId === m.id && !l.afterAt), "You already started the van log for this day. Fill in the \"after\" part when you park.");
+      need(!v.damage || (v.damageNote || "").trim(), "Describe the damage you noticed (where and what).");
+      const prev = [...db.vanLogs].reverse().find((l) => l.endKm != null);
+      const l = { id: `vl${db.vanLogs.length + 1}`, sunday, driverId: m.id, driverName: m.name, beforeAt: now().toISOString(), startKm: v.startKm, fuelStart: v.fuel, checks: v.checks || {},
+        damageBefore: !!v.damage, damageBeforeNote: v.damageNote || null, afterAt: null, endKm: null, fuelBought: false, receiptGiven: false, damageAfter: false };
+      db.vanLogs.push(l);
+      const alert = (message) => db.alerts.push({ id: `a${db.alerts.length + 1}`, kind: "van", sunday, driverId: m.id, riderId: null, resolved: false, message, createdAt: now().toISOString() });
+      if (v.damage) alert(`${m.name} noticed damage on the church van BEFORE driving: ${v.damageNote.trim()}.${prev ? ` It was last driven by ${prev.driverName} on ${prev.sunday} (ended at ${prev.endKm} km), who reported ${prev.damageAfter ? "damage too" : "no damage"}.` : " There is no earlier trip in the log."}`);
+      if (prev && v.startKm !== prev.endKm) alert(`Church van kilometres don't match: ${m.name} started at ${v.startKm} km, but the last trip (${prev.driverName}, ${prev.sunday}) ended at ${prev.endKm} km. ${v.startKm > prev.endKm ? `${v.startKm - prev.endKm} km were driven without a log entry.` : "Check the numbers with both drivers."}`);
+      return l.id;
+    },
+    async vanLogEnd(id, v) {
+      const m = me();
+      const l = (db.vanLogs || []).find((x) => x.id === id);
+      need(l, "That van log was not found.");
+      need(l.driverId === m.id || isLeader(), "Only the person who started this log can finish it.");
+      need(v.endKm != null && v.endKm >= l.startKm, `The kilometres at the end can't be less than at the start (${l.startKm}).`);
+      need(v.endKm - l.startKm <= 1000, "That is over 1000 km for one day. Check the number.");
+      need(!v.fuelBought || v.cost > 0, "Enter how much the fuel cost.");
+      need(!v.damage || (v.damageNote || "").trim(), "Describe the damage (where and what happened).");
+      Object.assign(l, { afterAt: now().toISOString(), endKm: v.endKm, fuelEnd: v.fuel, fuelBought: !!v.fuelBought, fuelLitres: v.fuelBought ? v.litres : null, fuelCost: v.fuelBought ? v.cost : null,
+        receiptGiven: !!v.receiptGiven, damageAfter: !!v.damage, damageAfterNote: v.damageNote || null, notes: v.notes || null });
+      const alert = (message) => db.alerts.push({ id: `a${db.alerts.length + 1}`, kind: "van", sunday: l.sunday, driverId: l.driverId, riderId: null, resolved: false, message, createdAt: now().toISOString() });
+      if (v.damage) alert(`${l.driverName} reported damage to the church van after driving: ${v.damageNote.trim()}.`);
+      if (v.fuelBought && !v.receiptGiven) alert(`${l.driverName} bought fuel for the church van ($${Number(v.cost).toFixed(2)}) and still has to give the receipt to the secretary.`);
+      return "ok";
+    },
+    async vanLogReceipt(id) { const l = (db.vanLogs || []).find((x) => x.id === id); need(l, "That van log was not found."); l.receiptGiven = true; return "ok"; },
+    async myVanLog(sunday) {
+      const m = me();
+      const logs = db.vanLogs || [];
+      const mine = [...logs].reverse().find((l) => l.sunday === sunday && l.driverId === m.id) || null;
+      const shift = (db.vanShifts || []).some((s) => s.sunday === sunday && s.driverId === m.id);
+      if (!shift && !mine) return null;
+      const prev = [...logs].reverse().find((l) => l.endKm != null && l !== mine);
+      return { ...(mine || { id: null }), lastDriver: prev?.driverName || null, lastEndKm: prev?.endKm ?? null, lastSunday: prev?.sunday || null, lastDamage: !!prev?.damageAfter };
+    },
+
     async savePlan(sunday, status, summary, assignments, waitlist) {
       need(isLeader(), "Only the transport leader can save a plan.");
+      need(status !== "approved" || !assignments.some((a) => byId(a.driverId)?.isVehicle) || (db.vanShifts || []).some((s) => s.sunday === sunday && s.driverId),
+        "Choose who drives the church van before approving.");
       validatePlan({ profilesById: new Map(db.profiles.map((p) => [p.id, p])), sunday, assignments });
       db.plans[sunday] = { sunday, status, summary: summary || {}, assignments: fresh(assignments), waitlist: fresh(waitlist || []), approvedAt: status === "approved" ? now().toISOString() : null };
     },

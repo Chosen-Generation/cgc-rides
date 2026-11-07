@@ -42,7 +42,7 @@ export function weeklyCheckin(sunday, appUrl = "") {
 
 export function riderDetails(sunday, rider, driver, stop, partyTotal = 1) {
   const who = partyTotal > 1 && (stop.seats ?? 1) < partyTotal ? `${stop.seats} of your group of ${partyTotal}` : partyTotal > 1 ? `your group of ${partyTotal}` : "you";
-  return `Hi ${first(rider.name)}, your ride for ${dayLabel(sunday)} is arranged. ${first(driver.name)}${driver.vehicle ? ` (${driver.vehicle})` : ""} will pick up ${who} around ${fmtMin(stop.pickupMin)}. Please be ready by ${fmtMin(stop.readyByMin)} to avoid delays.${driver.phone ? ` Driver's number: ${driver.phone}.` : ""} Service is at ${svcLabel(sunday)}.`;
+  return `Hi ${first(rider.name)}, your ride for ${dayLabel(sunday)} is arranged. ${first(driver.name)}${driver.vehicle ? ` (${driver.vehicle})` : ""} will ${who === "you" ? "pick you up" : `pick up ${who}`} around ${fmtMin(stop.pickupMin)}. Please be ready by ${fmtMin(stop.readyByMin)} to avoid delays.${driver.phone ? ` Driver's number: ${driver.phone}.` : ""} Service is at ${svcLabel(sunday)}.`;
 }
 
 export function waitlisted(sunday, rider) {
@@ -51,7 +51,8 @@ export function waitlisted(sunday, rider) {
 
 export function driverRoute(sunday, driver, cars, ridersById, groupSizes = new Map(), { rebooked = [] } = {}) {
   const details = CONFIG.texts?.includeDetails !== false;
-  const lines = [`Hi ${first(driver.name)}, thank you for driving on ${dayLabel(sunday)}.`];
+  const van = !!driver.isVehicle;
+  const lines = [`Hi ${first(driver.name)}, thank you for driving ${van ? "the church van " : ""}on ${dayLabel(sunday)}.`];
   if (rebooked.length) {
     const who = rebooked.length === 1 ? rebooked[0] : `${rebooked.slice(0, -1).join(", ")} and ${rebooked.at(-1)}`;
     lines.push(`Sorry for the back-and-forth: ${who} ${rebooked.length === 1 ? "is" : "are"} coming after all, so ${rebooked.length === 1 ? "they're" : "they're all"} back on your list.`);
@@ -61,7 +62,8 @@ export function driverRoute(sunday, driver, cars, ridersById, groupSizes = new M
   lines.push(`You have ${people} ${people === 1 ? "person" : "people"} to pick up.`);
   const leaveLine = (car) => {
     const leave = car.stops[0]?.departMin, arrive = car.stops[0]?.arriveMin;
-    const from = car.trip > 1 ? "church" : "home";
+    // The church van starts at church (pick it up there) unless the driver took it home.
+    const from = car.trip > 1 ? "church" : van ? (driver.vanStart === "home" ? "home with the van" : "the church with the van") : "home";
     return leave != null
       ? `Please leave ${from} by ${fmtMin(leave)}${arrive != null ? ` to reach church by ${fmtMin(arrive)}` : ""} (service is at ${svcLabel(sunday)}).`
       : `Please leave ${from} in good time to reach your first pickup by ${fmtMin(car.stops[0]?.pickupMin)}${arrive != null ? ` and church by ${fmtMin(arrive)}` : ""}.`;

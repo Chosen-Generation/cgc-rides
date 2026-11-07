@@ -25,8 +25,12 @@ export async function createLiveStore(config, { createClient } = {}) {
   const getUid = () => { if (!user) throw new Error("Please sign in."); return user.id; };
 
   const requestFrom = (r) => ({ id: r.id, riderId: r.rider_id, sunday: r.sunday, rideHome: r.ride_home, note: r.note, extraPeople: r.extra_people || 0, canSplit: !!r.can_split, status: r.status });
-  const rideFrom = (r) => camelRow(r, { sunday: "sunday", status: "status", rideHome: "ride_home", note: "note", extraPeople: "extra_people", canSplit: "can_split", driverName: "driver_name", driverPhone: "driver_phone", vehicle: "vehicle", seats: "seats", trip: "trip", pickupMin: "pickup_min", readyByMin: "ready_by_min", arriveMin: "arrive_min", waitlistedSeats: "waitlisted_seats" });
-  const routeFrom = (r) => camelRow(r, { trip: "trip", order: "stop_order", pickupMin: "pickup_min", readyByMin: "ready_by_min", arriveMin: "arrive_min", departMin: "depart_min", riderName: "rider_name", riderPhone: "rider_phone", address: "address", neighbourhood: "neighbourhood", lat: "lat", lng: "lng", minor: "minor", riderNotes: "rider_notes", requestNote: "request_note", rideHome: "ride_home", extraPeople: "extra_people", seats: "seats", partyTotal: "party_total" });
+  const rideFrom = (r) => camelRow(r, { sunday: "sunday", status: "status", rideHome: "ride_home", note: "note", extraPeople: "extra_people", canSplit: "can_split", driverName: "driver_name", driverPhone: "driver_phone", vehicle: "vehicle", seats: "seats", trip: "trip", pickupMin: "pickup_min", readyByMin: "ready_by_min", arriveMin: "arrive_min", waitlistedSeats: "waitlisted_seats", inVan: "in_van" });
+  const vanLogFrom = (l) => ({ id: l.id, sunday: l.sunday, driverId: l.driver_id, driverName: l.driver_name, beforeAt: l.before_at, startKm: l.start_km,
+    fuelStart: l.fuel_start, checks: l.checks || {}, damageBefore: l.damage_before, damageBeforeNote: l.damage_before_note, afterAt: l.after_at, endKm: l.end_km,
+    fuelEnd: l.fuel_end, fuelBought: l.fuel_bought, fuelLitres: l.fuel_litres == null ? null : Number(l.fuel_litres), fuelCost: l.fuel_cost == null ? null : Number(l.fuel_cost),
+    receiptGiven: l.receipt_given, damageAfter: l.damage_after, damageAfterNote: l.damage_after_note, notes: l.notes });
+  const routeFrom = (r) => camelRow(r, { trip: "trip", order: "stop_order", pickupMin: "pickup_min", readyByMin: "ready_by_min", arriveMin: "arrive_min", departMin: "depart_min", riderName: "rider_name", riderPhone: "rider_phone", address: "address", neighbourhood: "neighbourhood", lat: "lat", lng: "lng", minor: "minor", riderNotes: "rider_notes", requestNote: "request_note", rideHome: "ride_home", extraPeople: "extra_people", seats: "seats", partyTotal: "party_total", inVan: "in_van", vanStart: "van_start" });
 
   return {
     mode: "live",
@@ -99,7 +103,12 @@ export async function createLiveStore(config, { createClient } = {}) {
       const me = await this.getMe();
       const res = await from("driver_weeks").select("*").eq("driver_id", me.id);
       fail(res);
-      return res.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note }));
+      return res.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note, vanOk: !!w.van_ok }));
+    },
+    /** Offer (or not) to drive the church van on a day. `available` keeps their own-car answer as it is. */
+    async setVanOffer(sunday, ok, available) {
+      const me = await this.getMe();
+      fail(await from("driver_weeks").upsert({ driver_id: me.id, sunday, available: !!available, van_ok: !!ok }, { onConflict: "driver_id,sunday" }));
     },
     async setAvailability(sunday, available, note = null) {
       const me = await this.getMe();
@@ -141,8 +150,12 @@ export async function createLiveStore(config, { createClient } = {}) {
         from("team_log").select("*").order("at", { ascending: false }).limit(50),
       ]);
       // These need the 21 Oct database update; until then, empty.
-      const [ur, pp, si] = await Promise.all([sb.rpc("unregistered_people"), sb.rpc("push_people"),
-        from("signup_issues").select("*").gte("at", new Date(Date.now() - 30 * 86400000).toISOString()).order("at", { ascending: false }).limit(300)]);
+      const [ur, pp, si, vs, vl] = await Promise.all([sb.rpc("unregistered_people"), sb.rpc("push_people"),
+        from("signup_issues").select("*").gte("at", new Date(Date.now() - 30 * 86400000).toISOString()).order("at", { ascending: false }).limit(300),
+        // The church van needs the 7 Nov database update; until then, none.
+        from("van_shifts").select("*"), from("van_logs").select("*").order("before_at", { ascending: false }).limit(100)]);
+      const vanLogs = vl.error ? [] : vl.data.map(vanLogFrom);
+      const vanShifts = vs.error ? [] : vs.data.map((x) => ({ sunday: x.sunday, driverId: x.driver_id, startFrom: x.start_from }));
       for (const r of [pr, rq, wk, pl, as, wl, al, cl]) fail(r);
       // Last-minute requests need the 20 Oct (afternoon) database update; until then, there are none.
       const helpRequests = hr.error || ha.error ? [] : hr.data.map((h) => ({
@@ -162,7 +175,7 @@ export async function createLiveStore(config, { createClient } = {}) {
       return {
         profiles: pr.data.map(profileFromRow),
         requests: rq.data.map(requestFrom),
-        weeks: wk.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note })),
+        weeks: wk.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note, vanOk: !!w.van_ok })),
         plans,
         alerts: al.data.map((a) => ({ id: a.id, kind: a.kind, sunday: a.sunday, driverId: a.driver_id, riderId: a.rider_id, message: a.message, resolved: a.resolved, createdAt: a.created_at })),
         consentLog: cl.data.map((c) => ({ profileId: c.profile_id, kind: c.kind, wording: c.wording, at: c.at })),
@@ -171,6 +184,8 @@ export async function createLiveStore(config, { createClient } = {}) {
         teamLog: tl.error ? [] : tl.data.map((t) => ({ at: t.at, actorName: t.actor_name, targetName: t.target_name, change: t.change })),
         unregistered: ur.error ? [] : ur.data.map((u) => ({ email: u.email, signedUpAt: u.signed_up_at, lastSignInAt: u.last_sign_in_at })),
         signupIssues: si.error ? [] : si.data.map((x) => ({ at: x.at, email: x.email, category: x.category, message: x.message, role: x.role })),
+        vanShifts,
+        vanLogs,
         pushPeople: pp.error ? [] : pp.data.map((x) => (typeof x === "string" ? x : x.push_people)),
       };
     },
@@ -196,6 +211,26 @@ export async function createLiveStore(config, { createClient } = {}) {
     async setTeamRole(id, role) { return rpc("set_team_role", { p_profile: id, p_role: role }); },
     /** Supervisor only: hand the supervisor role to a leader; myRole is what the supervisor becomes. */
     async handOverSupervisor(id, myRole) { return rpc("hand_over_supervisor", { p_profile: id, p_my_role: myRole }); },
+    // ---- church van
+    async setChurchVan({ seats, address, lat, lng }) { return rpc("set_church_van", { p_seats: seats, p_address: address, p_lat: lat, p_lng: lng }); },
+    // ---- van logbook
+    async vanLogStart(sunday, v) { return rpc("van_log_start", { p_sunday: sunday, p_start_km: v.startKm, p_fuel: v.fuel, p_checks: v.checks, p_damage: !!v.damage, p_damage_note: v.damageNote || null }); },
+    async vanLogEnd(id, v) {
+      return rpc("van_log_end", { p_log: id, p_end_km: v.endKm, p_fuel: v.fuel, p_fuel_bought: !!v.fuelBought, p_litres: v.litres ?? null, p_cost: v.cost ?? null,
+        p_receipt_given: !!v.receiptGiven, p_damage: !!v.damage, p_damage_note: v.damageNote || null, p_notes: v.notes || null });
+    },
+    async vanLogReceipt(id) { return rpc("van_log_receipt", { p_log: id }); },
+    /** This person's van log for a day (null if they aren't driving the van then). */
+    async myVanLog(sunday) {
+      const res = await sb.rpc("my_van_log", { p_sunday: sunday });
+      if (res.error || !res.data?.length) return null; // before the van update, or not their van day
+      const r = res.data[0];
+      return { id: r.id, startKm: r.start_km, fuelStart: r.fuel_start, damageBefore: r.damage_before, beforeAt: r.before_at, endKm: r.end_km, fuelEnd: r.fuel_end,
+        fuelBought: r.fuel_bought, fuelCost: r.fuel_cost == null ? null : Number(r.fuel_cost), receiptGiven: r.receipt_given, afterAt: r.after_at,
+        lastDriver: r.last_driver, lastEndKm: r.last_end_km, lastSunday: r.last_sunday, lastDamage: r.last_damage };
+    },
+    /** Who drives the van on a day (null = the van isn't used), starting from "church" or "home". */
+    async setVanDriver(sunday, driverId, startFrom = "church") { return rpc("set_van_driver", { p_sunday: sunday, p_driver: driverId || null, p_start_from: startFrom }); },
     async savePlan(sunday, status, summary, assignments, waitlist) {
       await rpc("save_plan", { p_sunday: sunday, p_status: status, p_summary: summary || {}, p_assignments: assignments, p_waitlist: waitlist || [] });
     },
