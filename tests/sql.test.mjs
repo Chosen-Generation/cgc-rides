@@ -677,3 +677,15 @@ test("van logbook: only the day's van driver; damage and unlogged kilometres are
   ]);
   assert.equal((await as("vr", () => q("select * from van_logs"))).length, 0);
 });
+
+test("drivers can say they're willing to drive the van and offer for a day", async () => {
+  const day = sundayInDays(42);
+  const me = (await q("select id from profiles where full_name='Vic Vandriver'"))[0].id;
+  await as("vd", () => db.query("update profiles set van_willing = true where id=$1", [me]));
+  await as("vd", () => db.query("insert into driver_weeks (driver_id, sunday, available, van_ok) values ($1,$2,true,true) on conflict (driver_id, sunday) do update set van_ok = true", [me, day]));
+  // Turning own-car availability off later keeps the van offer.
+  await as("vd", () => db.query("insert into driver_weeks (driver_id, sunday, available) values ($1,$2,false) on conflict (driver_id, sunday) do update set available = excluded.available", [me, day]));
+  const row = await as("leader", () => q("select available, van_ok from driver_weeks where driver_id=$1 and sunday=$2", [me, day]));
+  assert.deepEqual({ ...row[0] }, { available: false, van_ok: true });
+  assert.equal((await q("select van_willing from profiles where id=$1", [me]))[0].van_willing, true);
+});

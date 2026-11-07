@@ -8,7 +8,7 @@ const MAP = {
   secondTrip: "second_trip", licenceOk: "licence_ok", insuranceOk: "insurance_ok",
   policeCheckExpiry: "police_check_expiry", textsConsentAt: "texts_consent_at",
   textsConsentWithdrawnAt: "texts_consent_withdrawn_at", createdAt: "created_at",
-  isSupervisor: "is_supervisor", leaderTitle: "leader_title", isVehicle: "is_vehicle",
+  isSupervisor: "is_supervisor", leaderTitle: "leader_title", isVehicle: "is_vehicle", vanWilling: "van_willing",
 };
 const SAME = ["id", "email", "phone", "role", "gender", "neighbourhood", "lat", "lng", "minor", "priority", "notes", "seats", "vehicle"];
 const toSnake = Object.fromEntries([...Object.entries(MAP), ...SAME.map((k) => [k, k])]);

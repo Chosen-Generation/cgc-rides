@@ -36,9 +36,9 @@ export function makeDemoState(now = new Date()) {
   const profiles = [
     base("leader", "Transport Leader (demo)", "Nutana", { role: "leader", isSupervisor: true, leaderTitle: "Supervisor", phone: "306-555-0100", gender: "F" }),
     driver("d-grace", "Grace Adeyemi", "Stonebridge", { gender: "F", seats: 4, drivesEveryWeek: true, vehicle: "Silver minivan", textsConsentAt: now.toISOString() }),
-    driver("d-daniel", "Daniel Okafor", "Evergreen", { gender: "M", seats: 3, drivesEveryWeek: true, vehicle: "Grey SUV" }),
+    driver("d-daniel", "Daniel Okafor", "Evergreen", { gender: "M", seats: 3, drivesEveryWeek: true, vehicle: "Grey SUV", vanWilling: true }),
     driver("d-ruth", "Ruth Mensah", "Confederation Park", { gender: "F", seats: 3, secondTrip: true, vehicle: "Blue sedan" }),
-    driver("d-samuel", "Samuel Boateng", "Lawson Heights", { gender: "M", seats: 2, drivesEveryWeek: true, vehicle: "Red hatchback", policeCheckExpiry: inDays(12) }),
+    driver("d-samuel", "Samuel Boateng", "Lawson Heights", { gender: "M", seats: 2, drivesEveryWeek: true, vehicle: "Red hatchback", policeCheckExpiry: inDays(12), vanWilling: true }),
     driver("d-esther", "Esther Williams", "Nutana", { gender: "F", seats: 3, vehicle: "White van", status: "suspended" }), // paused by the leader: gets no riders
     base("d-new", "Joel Anderson", "Briarwood", { role: "driver", status: "pending", gender: "M", seats: 4, vehicle: "Black truck (crew cab)" }),
     base("r-mary", "Mary Johnson", "Evergreen", { gender: "F", priority: true, weeklyCheckin: true, notes: "Uses a walker (folds into the trunk)", textsConsentAt: now.toISOString() }),
@@ -68,6 +68,7 @@ export function makeDemoState(now = new Date()) {
   // Ruth (second trip) is free the first Sunday; Daniel is away the second.
   const weeks = [
     { driverId: "d-ruth", sunday: first, available: true },
+    { driverId: "d-samuel", sunday: first, available: true, vanOk: true },
     { driverId: "d-daniel", sunday: sundays[1], available: false, note: "Away" },
   ];
   // Samuel drives the church van on the first Sunday.

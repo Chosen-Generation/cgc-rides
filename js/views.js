@@ -147,6 +147,7 @@ export function profileForm(S, p0 = {}, { leaderEditing = false, registering = f
       <label class="field">Vehicle (so riders can spot you)<input name="vehicle" value="${esc(p.vehicle || "")}" placeholder="e.g. Grey SUV"></label>
       ${chk("drivesEveryWeek", p.drivesEveryWeek, "I drive <strong>every</strong> Sunday unless I say otherwise")}
       ${chk("secondTrip", p.secondTrip, "I can do a <strong>second trip</strong> if there are more riders than seats")}
+      ${chk("vanWilling", p.vanWilling, "🚐 I'm willing to drive the <strong>church van</strong> some Sundays")}
       ${registering ? "" : '<p class="small muted">The transport leader will vet you and approve you before you are given riders.</p>'}
     </fieldset>` : "";
   const leaderBits = leaderEditing ? `<fieldset class="field"><legend>Leader only</legend>
@@ -345,6 +346,10 @@ export function driverView(S) {
     let body = svc.cancelled ? `<p class="muted">There's no service this day.</p>` : `<p>${avail ? badge("You're driving", "ok") : badge(svc.special ? "Can you drive?" : "Not driving", svc.special ? "gold" : "muted")}
       ${btn(avail ? `I can't drive ${what}` : `I can drive ${what}`, "toggle-avail", { sunday, to: avail ? "no" : "yes" }, avail ? "ghost" : (svc.special ? "primary" : "ghost"))}</p>
       ${svc.special && !avail ? `<p class="small muted">This is a special service. Tap the button if you can give rides for it.</p>` : ""}`;
+    if (!svc.cancelled && me.vanWilling && me.status === "cleared") {
+      const vanOk = !!(S.weeks || []).find((w) => w.sunday === sunday && w.vanOk);
+      body += `<p class="small">${vanOk ? badge("🚐 Offered to drive the van", "ok") : ""} ${btn(vanOk ? "I can't drive the van this day" : "🚐 I can drive the church van this day", "van-offer", { sunday, to: vanOk ? "no" : "yes" }, "link")}</p>`;
+    }
     if (route.length) {
       if (drivesVan) body += banner("info", `🚐 <strong>You're driving the church van</strong> this day, so your own car isn't used. ${route.find((r) => r.inVan)?.vanStart === "home" ? "Start from home with the van." : "Pick the van up at the church."}`) + vanLogBox(S, sunday);
       body += groups.map((g) => {
@@ -443,7 +448,14 @@ function vanCard(S, sunday) {
   }
   const shift = vanShiftFor(S.data, sunday);
   const vd = vanDriverFor(S.data, sunday);
-  const candidates = S.data.profiles.filter((p) => !p.isVehicle && (p.role === "driver" || p.role === "leader") && p.status === "cleared").sort((a, b) => a.name.localeCompare(b.name));
+  const cleared = S.data.profiles.filter((p) => !p.isVehicle && (p.role === "driver" || p.role === "leader") && p.status === "cleared").sort((a, b) => a.name.localeCompare(b.name));
+  // The pool: who offered for this day, then who's willing in general, then everyone else cleared.
+  const offeredIds = new Set((S.data.weeks || []).filter((w) => w.sunday === sunday && w.vanOk).map((w) => w.driverId));
+  const offered = cleared.filter((p) => offeredIds.has(p.id));
+  const willing = cleared.filter((p) => !offeredIds.has(p.id) && p.vanWilling);
+  const others = cleared.filter((p) => !offeredIds.has(p.id) && !p.vanWilling);
+  const opt = (p) => `<option value="${esc(p.id)}" ${vanDriverFor(S.data, sunday)?.id === p.id ? "selected" : ""}>${esc(p.name)}</option>`;
+  const group = (label, list) => (list.length ? `<optgroup label="${esc(label)}">${list.map(opt).join("")}</optgroup>` : "");
   const fromHome = shift?.startFrom === "home";
   const homeOk = vd && isConfirmed(vd);
   const line = vd
@@ -453,7 +465,8 @@ function vanCard(S, sunday) {
     <p class="small">${line}</p>
     <form data-form="van-driver" class="stack">
       <label class="field">Who drives the van on ${esc(dayLabel(sunday))}?
-        <select name="driver"><option value="">Nobody (don't use the van this day)</option>${candidates.map((p) => `<option value="${esc(p.id)}" ${vd?.id === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label>
+        <select name="driver"><option value="">Nobody (don't use the van this day)</option>${group("Offered for this day", offered)}${group("Willing to drive the van", willing)}${group("Other cleared drivers", others)}</select></label>
+      <p class="small">${offered.length ? `🚐 Offered for ${esc(dayLabel(sunday))}: <strong>${offered.map((p) => esc(firstName(p.name))).join(", ")}</strong>.` : `Nobody has offered for this day yet.`}${willing.length ? ` <span class="muted">Willing in general: ${willing.map((p) => esc(firstName(p.name))).join(", ")}.</span>` : ""}</p>
       <fieldset class="field"><legend>Where do they start?</legend>
         <label class="check"><input type="radio" name="startFrom" value="church" ${fromHome ? "" : "checked"}> From the church (they pick the van up there)</label>
         <label class="check"><input type="radio" name="startFrom" value="home" ${fromHome ? "checked" : ""}> From their home (they took the van home the night before)</label></fieldset>
@@ -786,7 +799,8 @@ function peopleTab(S) {
       ${S.editing !== "new" && p.role !== "leader" ? `<hr><h3>Remove ${esc(firstName(p.name))}</h3><p class="small muted">Deletes this person with their requests, availability and rides (for example a test name). Any plan they are in goes back to a draft so you can redo it. This cannot be undone.</p>${btn("Remove " + firstName(p.name), "remove-person", { id: p.id })}` : ""}</section>`;
   }
   const pushOn = new Set(S.data.pushPeople || []);
-  const pushMark = (p) => (pushOn.has(p.id) ? " · 🔔 notifications on" : "") + (p.geoSource === "pin" ? " · 📍 pin placed by hand" : p.geoSource === "gps" ? " · 📍 located by phone" : "");
+  const vanMark = (p) => (p.vanWilling ? " · 🚐 van" : "");
+  const pushMark = (p) => vanMark(p) + (pushOn.has(p.id) ? " · 🔔 notifications on" : "") + (p.geoSource === "pin" ? " · 📍 pin placed by hand" : p.geoSource === "gps" ? " · 📍 located by phone" : "");
   const drivers = S.data.profiles.filter((p) => !p.isVehicle && (isDriver(p) || p.role === "driver"));
   const riders = S.data.profiles.filter((p) => p.role === "rider");
   const dRow = (d) => {

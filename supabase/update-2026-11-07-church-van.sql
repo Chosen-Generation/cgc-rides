@@ -1,7 +1,8 @@
 -- Update for an EXISTING Chosen Generation Rides database (7 Nov 2026): the church van.
 -- 1) The van is a vehicle in the plan (up to 14 passengers). On days a leader chooses a van driver,
 --    the planner uses it first; the driver starts from the church or from their home.
--- 2) The van logbook: before/after checks (km, fuel, receipt, damage) by whoever drives it.
+-- 2) Drivers say if they're willing to drive the van, and offer for particular days.
+-- 3) The van logbook: before/after checks (km, fuel, receipt, damage) by whoever drives it.
 -- Supabase -> SQL Editor -> New query -> paste ALL of this -> Run. Safe to run more than once.
 
 -- ---------------------------------------------------------------- church van
@@ -18,6 +19,11 @@ create table if not exists van_shifts (
   start_from text not null default 'church' check (start_from in ('church', 'home')),
   updated_at timestamptz not null default now()
 );
+
+-- Drivers say whether they're willing to drive the church van at all (profile), and offer for
+-- particular days (driver_weeks.van_ok), so leaders can choose the van driver from that pool.
+alter table profiles add column if not exists van_willing boolean not null default false;
+alter table driver_weeks add column if not exists van_ok boolean not null default false;
 
 -- The van logbook: the van driver fills in a short check before driving and after parking.
 -- Kilometres, fuel and any damage are recorded with who drove and when, so a problem can be

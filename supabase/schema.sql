@@ -261,6 +261,11 @@ create table if not exists van_shifts (
   updated_at timestamptz not null default now()
 );
 
+-- Drivers say whether they're willing to drive the church van at all (profile), and offer for
+-- particular days (driver_weeks.van_ok), so leaders can choose the van driver from that pool.
+alter table profiles add column if not exists van_willing boolean not null default false;
+alter table driver_weeks add column if not exists van_ok boolean not null default false;
+
 -- The van logbook: the van driver fills in a short check before driving and after parking.
 -- Kilometres, fuel and any damage are recorded with who drove and when, so a problem can be
 -- traced to when it first appeared (protecting whoever drove it properly).

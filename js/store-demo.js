@@ -107,6 +107,12 @@ export function createDemoStore({ now = () => new Date() } = {}) {
 
     // ---- driver
     async myWeeks() { return db.weeks.filter((w) => w.driverId === me().id).map(fresh); },
+    async setVanOffer(sunday, ok, available) {
+      const m = me();
+      const ex = db.weeks.find((w) => w.driverId === m.id && w.sunday === sunday);
+      if (ex) Object.assign(ex, { vanOk: !!ok });
+      else db.weeks.push({ driverId: m.id, sunday, available: !!available, note: null, vanOk: !!ok });
+    },
     async setAvailability(sunday, available, note = null) {
       const m = me();
       const ex = db.weeks.find((w) => w.driverId === m.id && w.sunday === sunday);

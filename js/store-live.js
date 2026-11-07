@@ -103,7 +103,12 @@ export async function createLiveStore(config, { createClient } = {}) {
       const me = await this.getMe();
       const res = await from("driver_weeks").select("*").eq("driver_id", me.id);
       fail(res);
-      return res.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note }));
+      return res.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note, vanOk: !!w.van_ok }));
+    },
+    /** Offer (or not) to drive the church van on a day. `available` keeps their own-car answer as it is. */
+    async setVanOffer(sunday, ok, available) {
+      const me = await this.getMe();
+      fail(await from("driver_weeks").upsert({ driver_id: me.id, sunday, available: !!available, van_ok: !!ok }, { onConflict: "driver_id,sunday" }));
     },
     async setAvailability(sunday, available, note = null) {
       const me = await this.getMe();
@@ -170,7 +175,7 @@ export async function createLiveStore(config, { createClient } = {}) {
       return {
         profiles: pr.data.map(profileFromRow),
         requests: rq.data.map(requestFrom),
-        weeks: wk.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note })),
+        weeks: wk.data.map((w) => ({ driverId: w.driver_id, sunday: w.sunday, available: w.available, note: w.note, vanOk: !!w.van_ok })),
         plans,
         alerts: al.data.map((a) => ({ id: a.id, kind: a.kind, sunday: a.sunday, driverId: a.driver_id, riderId: a.rider_id, message: a.message, resolved: a.resolved, createdAt: a.created_at })),
         consentLog: cl.data.map((c) => ({ profileId: c.profile_id, kind: c.kind, wording: c.wording, at: c.at })),

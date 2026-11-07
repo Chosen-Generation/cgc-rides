@@ -229,6 +229,7 @@ function readProfile(form) {
   if (has("role")) out.role = text("role");
   if (has("alsoDrives")) out.status = bool("alsoDrives") ? "cleared" : "none";
   if (has("seats")) Object.assign(out, { seats: Number(f.get("seats")) || 0, vehicle: text("vehicle"), drivesEveryWeek: bool("drivesEveryWeek"), secondTrip: bool("secondTrip") });
+  if (has("vanWilling")) out.vanWilling = bool("vanWilling");
   if (has("priority")) out.priority = bool("priority");
   if (has("status")) Object.assign(out, { status: text("status"), licenceOk: bool("licenceOk"), insuranceOk: bool("insuranceOk"), policeCheckExpiry: text("policeCheckExpiry") });
   return out;
@@ -341,6 +342,11 @@ const actions = {
   async "consent-off"() { await store.withdrawConsent(); await reload(); say("Texts turned off."); },
 
   // driver
+  async "van-offer"(d) {
+    await store.setVanOffer(d.sunday, d.to === "yes", driverAvailable(S.me, S.weeks, d.sunday));
+    await reload();
+    say(d.to === "yes" ? "Thank you! The leaders can see you've offered to drive the church van that day." : "Noted: you're not offering to drive the van that day.");
+  },
   async "toggle-avail"(d) { await store.setAvailability(d.sunday, d.to === "yes"); await reload(); },
   async "cant-make-it"(d) {
     if (!confirm("Tell the leader you can't drive on " + fmtDate(d.sunday) + "? Your riders will be moved to other drivers.")) return;
