@@ -16,6 +16,7 @@ import { setServices, upcomingDays, configFor, serviceFor, dayLabel as dayLabelF
 import { DEMO_CHURCH } from "./demo-data.js";
 import { pushState, turnOn, turnOff, resync, askPermission } from "./push.js";
 import { approvalPings } from "./notify.js";
+import { withVan, profilesForDay, findVan, VAN_CHECKS } from "./van.js";
 
 const root = document.getElementById("app");
 let store;
@@ -99,7 +100,8 @@ async function resolveChurch() {
 }
 
 function excludedFor(sunday) {
-  return S.data.profiles.filter(isDriver).map((d) => ({ name: d.name, reason: driverIssue({ ...d, available: driverAvailable(d, S.data.weeks, sunday) }, sunday) })).filter((e) => e.reason);
+  const drivers = withVan(S.data.profiles.filter(isDriver).map((d) => ({ ...d, available: driverAvailable(d, S.data.weeks, sunday) })), S.data, sunday);
+  return drivers.map((d) => ({ name: d.name, reason: driverIssue(d, sunday) })).filter((e) => e.reason);
 }
 
 function planViewFromSaved() {
@@ -192,6 +194,11 @@ async function load() {
     S.weeks = await store.myWeeks();
     S.routes = {};
     for (const s of S.sundays) S.routes[s] = await store.myRoute(s);
+  }
+  if ((S.me.role === "driver" || S.me.role === "leader") && store.myVanLog) {
+    // The van logbook, for days this person drives the church van.
+    S.vanLogs = {};
+    for (const s of S.sundays) S.vanLogs[s] = await store.myVanLog(s).catch(() => null);
   }
   if (S.me.role === "leader") {
     S.weeks = await store.myWeeks();
@@ -290,7 +297,7 @@ async function persistPlan(status) {
   if (status === "approved") {
     // Ping the people whose ride changed (only those with notifications on receive it).
     try {
-      const pings = approvalPings({ before, after: pv, sunday: S.sunday, profilesById: new Map(S.data.profiles.map((p) => [p.id, p])) });
+      const pings = approvalPings({ before, after: pv, sunday: S.sunday, profilesById: new Map(profilesForDay(S.data, S.sunday).map((p) => [p.id, p])) });
       await store.queuePush(pings);
     } catch (err) { console.warn("Couldn't queue notifications", err); }
   }
@@ -515,6 +522,7 @@ const actions = {
     const on = new Set(S.data.pushPeople || []);
     S.remindResult = { group: d.group, sent: Number(sent) || 0, others: list.filter((p) => !on.has(p.id)) };
   },
+  async "van-receipt"(d) { await store.vanLogReceipt(d.id); await reload(); say("Receipt marked as given to the secretary."); },
   async "push-off"() { S.push = await turnOff(store); say("Notifications turned off for this device."); },
   "push-later"() { S.pushLater = true; try { localStorage.setItem("cgc-push-later", "1"); } catch {} say("No problem. You can turn notifications on any time from My details."); },
   async "remove-person"(d) {
@@ -652,6 +660,59 @@ async function onSubmit(form) {
   if (kind === "help") { await findHelpers(form); return; }
   if (kind === "service") { await saveServiceForm(form); return; }
   if (kind === "help-ask") { await askInApp(form); return; }
+  if (kind === "van-log-start") {
+    const f = new FormData(form);
+    const startKm = Number(f.get("startKm"));
+    if (!f.get("startKm") || !Number.isFinite(startKm) || startKm < 0) throw new Error("Enter the kilometres shown on the van before you drive.");
+    if (!f.get("fuel")) throw new Error("Choose the fuel level.");
+    const checks = Object.fromEntries(VAN_CHECKS.map(([k]) => [k, f.getAll("check").includes(k)]));
+    const damage = f.get("damage") === "yes";
+    await store.vanLogStart(form.dataset.sunday, { startKm: Math.round(startKm), fuel: String(f.get("fuel")), checks, damage, damageNote: String(f.get("damageNote") || "").trim() });
+    await reload();
+    say(damage ? "Saved. The damage you noticed is on record before your trip, and the leaders have been told. Drive safely!" : "Saved. Drive safely! Fill in the \"after\" part when you park.");
+    return;
+  }
+  if (kind === "van-log-end") {
+    const f = new FormData(form);
+    const endKm = Number(f.get("endKm"));
+    if (!f.get("endKm") || !Number.isFinite(endKm)) throw new Error("Enter the kilometres shown on the van now.");
+    if (!f.get("fuel")) throw new Error("Choose the fuel level.");
+    const fuelBought = f.get("fuelBought") === "on";
+    const num = (n) => (f.get(n) ? Number(f.get(n)) : null);
+    const damage = f.get("damage") === "yes";
+    await store.vanLogEnd(form.dataset.id, { endKm: Math.round(endKm), fuel: String(f.get("fuel")), fuelBought, litres: num("litres"), cost: num("cost"),
+      receiptGiven: f.get("receiptGiven") === "on", damage, damageNote: String(f.get("damageNote") || "").trim(), notes: String(f.get("notes") || "").trim() });
+    await reload();
+    say(`Thank you! The van is logged.${fuelBought && f.get("receiptGiven") !== "on" ? " Please give the fuel receipt to the church secretary." : ""}`);
+    return;
+  }
+  if (kind === "van-setup") {
+    needChurch();
+    const seats = Number(new FormData(form).get("seats"));
+    if (!(seats >= 1 && seats <= 14)) throw new Error("Seats must be between 1 and 14 (not counting the driver).");
+    const had = !!findVan(S.data.profiles);
+    await store.setChurchVan({ seats, address: "At the church", lat: S.church.lat, lng: S.church.lng });
+    S.vanOpen = true;
+    await reload();
+    say(had ? "Van seats saved." : "The church van is added. Choose a van driver for any day you want to use it.");
+    return;
+  }
+  if (kind === "van-driver") {
+    const f = new FormData(form);
+    const driverId = String(f.get("driver") || "") || null;
+    const startFrom = f.get("startFrom") === "home" ? "home" : "church";
+    const pv = S.planView;
+    if (pv?.edited && pv.dirty && !confirm("You have changes to this plan that aren't saved. Changing the van driver re-plans this day. Continue?")) return;
+    await store.setVanDriver(S.sunday, driverId, startFrom);
+    // Not shared yet: re-plan the day from scratch so the van takes the riders who live close together.
+    // Already shared: keep everyone where they are; the van driver's riders move, and the van offers its seats to anyone waiting.
+    if (!pv || pv.status !== "approved") S.planView = null;
+    else S.planView = { ...pv, edited: false };
+    S.vanOpen = false;
+    await reload();
+    say(driverId ? "Van driver saved. The plan now uses the van. Check it, then approve." : "The van isn't used this day. The plan uses the cars.");
+    return;
+  }
   if (kind === "team-add") {
     const f = new FormData(form);
     const p = S.data.profiles.find((x) => x.id === f.get("person"));

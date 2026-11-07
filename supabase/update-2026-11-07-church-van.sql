@@ -1,37 +1,62 @@
 -- Update for an EXISTING Chosen Generation Rides database (7 Nov 2026): the church van.
--- The van is a vehicle in the plan (parked at church, up to 14 passengers), a leader chooses who
--- drives it each service day, and it can take people home after the service.
+-- 1) The van is a vehicle in the plan (up to 14 passengers). On days a leader chooses a van driver,
+--    the planner uses it first; the driver starts from the church or from their home.
+-- 2) The van logbook: before/after checks (km, fuel, receipt, damage) by whoever drives it.
 -- Supabase -> SQL Editor -> New query -> paste ALL of this -> Run. Safe to run more than once.
 
 -- ---------------------------------------------------------------- church van
 -- The van is a "vehicle" profile (not a person): it never signs in, is always cleared, and is
--- parked at the church. For each service day a leader chooses who drives it (van_shifts); that
--- person's own car isn't used that day. The van can also take people home after the service.
+-- parked at the church. It's used only on days a leader chooses who drives it (van_shifts); that
+-- person's own car isn't used that day. They start from the church, or from their home if they
+-- took the van home the night before.
 alter table profiles add column if not exists is_vehicle boolean not null default false;
 create unique index if not exists profiles_one_van on profiles ((true)) where is_vehicle;
 
 create table if not exists van_shifts (
-  sunday          date primary key,                                   -- the service date
-  driver_id       uuid references profiles (id) on delete set null,    -- who drives the van that day
-  home_depart_min int,                                                 -- when it leaves church to take people home
-  updated_at      timestamptz not null default now()
+  sunday     date primary key,                                   -- the service date
+  driver_id  uuid references profiles (id) on delete set null,    -- who drives the van that day
+  start_from text not null default 'church' check (start_from in ('church', 'home')),
+  updated_at timestamptz not null default now()
 );
 
-create table if not exists home_rides (
-  plan_id    uuid not null references plans (id) on delete cascade,
-  rider_id   uuid not null references profiles (id) on delete cascade,
-  stop_order int not null default 0,
-  drop_min   int,                       -- estimated drop-off time, minutes after midnight
-  seats      int not null default 1 check (seats >= 1),
-  primary key (plan_id, rider_id)
+-- The van logbook: the van driver fills in a short check before driving and after parking.
+-- Kilometres, fuel and any damage are recorded with who drove and when, so a problem can be
+-- traced to when it first appeared (protecting whoever drove it properly).
+create table if not exists van_logs (
+  id              uuid primary key default gen_random_uuid(),
+  sunday          date not null,
+  driver_id       uuid references profiles (id) on delete set null,
+  driver_name     text,                                 -- kept even if the person is removed later
+  -- before driving
+  before_at       timestamptz not null default now(),
+  start_km        int not null check (start_km >= 0),
+  fuel_start      text check (fuel_start in ('full', '3/4', '1/2', '1/4', 'low')),
+  checks          jsonb not null default '{}'::jsonb,   -- e.g. {"tires":true,"lights":true,...}
+  damage_before   boolean not null default false,
+  damage_before_note text,
+  -- after parking
+  after_at        timestamptz,
+  end_km          int check (end_km >= 0),
+  fuel_end        text check (fuel_end in ('full', '3/4', '1/2', '1/4', 'low')),
+  fuel_bought     boolean not null default false,
+  fuel_litres     numeric(6,2),
+  fuel_cost       numeric(8,2),
+  receipt_given   boolean not null default false,      -- receipt handed to the church secretary
+  damage_after    boolean not null default false,
+  damage_after_note text,
+  notes           text
 );
+create index if not exists van_logs_before_idx on van_logs (before_at desc);
+
+alter table alerts drop constraint if exists alerts_kind_check;
+alter table alerts add constraint alerts_kind_check check (kind in ('driver_cancel', 'rider_cancel', 'info', 'van'));
 
 alter table van_shifts enable row level security;
-alter table home_rides enable row level security;
 drop policy if exists van_shifts_leader on van_shifts;
 create policy van_shifts_leader on van_shifts for select using (is_leader());
-drop policy if exists home_rides_leader on home_rides;
-create policy home_rides_leader on home_rides for select using (is_leader());
+alter table van_logs enable row level security;
+drop policy if exists van_logs_leader on van_logs;
+create policy van_logs_leader on van_logs for select using (is_leader());
 
 -- Leaders: add the church van, or change its seats or where it's parked.
 create or replace function set_church_van(p_seats int, p_address text, p_lat double precision, p_lng double precision)
@@ -55,63 +80,128 @@ begin
   return vid;
 end $$;
 
--- Leaders: who drives the van on a service day (null = nobody), and when it leaves church to take people home.
-create or replace function set_van_driver(p_sunday date, p_driver uuid, p_home_depart_min int default null)
+-- Leaders: who drives the van on a service day (null = the van isn't used), and where they start:
+-- 'church' (pick the van up at church) or 'home' (they took it home the night before).
+drop function if exists set_van_driver(date, uuid, int);
+create or replace function set_van_driver(p_sunday date, p_driver uuid, p_start_from text default 'church')
 returns text
 language plpgsql security definer set search_path = public, pg_temp as $$
 begin
   if not is_leader() then raise exception 'Only leaders can choose the van driver.'; end if;
-  if p_driver is not null and not exists (
-    select 1 from profiles where id = p_driver and not is_vehicle and driver_status = 'cleared' and role in ('driver', 'leader')) then
+  if p_driver is null then
+    delete from van_shifts where sunday = p_sunday;
+    return 'ok';
+  end if;
+  if not exists (select 1 from profiles where id = p_driver and not is_vehicle and driver_status = 'cleared' and role in ('driver', 'leader')) then
     raise exception 'Only a cleared driver can drive the church van.';
   end if;
-  if p_driver is null and p_home_depart_min is null then
-    delete from van_shifts where sunday = p_sunday;
-  else
-    insert into van_shifts (sunday, driver_id, home_depart_min) values (p_sunday, p_driver, p_home_depart_min)
-    on conflict (sunday) do update set driver_id = excluded.driver_id, home_depart_min = excluded.home_depart_min, updated_at = now();
+  if coalesce(p_start_from, 'church') not in ('church', 'home') then raise exception 'Start from the church or from home.'; end if;
+  insert into van_shifts (sunday, driver_id, start_from) values (p_sunday, p_driver, coalesce(p_start_from, 'church'))
+  on conflict (sunday) do update set driver_id = excluded.driver_id, start_from = excluded.start_from, updated_at = now();
+  return 'ok';
+end $$;
+
+-- Before driving. Only the person chosen to drive the van that day (or a leader).
+-- Flags damage they find (with who drove it last) and kilometres nobody logged.
+create or replace function van_log_start(p_sunday date, p_start_km int, p_fuel text, p_checks jsonb,
+                                         p_damage boolean default false, p_damage_note text default null)
+returns uuid
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare me profiles; prev van_logs; lid uuid;
+begin
+  select * into me from profiles where user_id = auth.uid();
+  if not found then raise exception 'Sign in first.'; end if;
+  if not is_leader() and not exists (select 1 from van_shifts where sunday = p_sunday and driver_id = me.id) then
+    raise exception 'Only the person driving the church van that day can fill in its log.';
+  end if;
+  if p_start_km is null or p_start_km < 0 then raise exception 'Enter the kilometres shown on the van before you drive.'; end if;
+  if exists (select 1 from van_logs where sunday = p_sunday and driver_id = me.id and after_at is null) then
+    raise exception 'You already started the van log for this day. Fill in the "after" part when you park.';
+  end if;
+  if p_damage and coalesce(trim(p_damage_note), '') = '' then raise exception 'Describe the damage you noticed (where and what).'; end if;
+  select * into prev from van_logs where end_km is not null order by after_at desc limit 1;
+
+  insert into van_logs (sunday, driver_id, driver_name, start_km, fuel_start, checks, damage_before, damage_before_note)
+  values (p_sunday, me.id, me.full_name, p_start_km, p_fuel, coalesce(p_checks, '{}'::jsonb), coalesce(p_damage, false), nullif(trim(p_damage_note), ''))
+  returning id into lid;
+
+  if coalesce(p_damage, false) then
+    insert into alerts (kind, sunday, driver_id, message)
+    values ('van', p_sunday, me.id, me.full_name || ' noticed damage on the church van BEFORE driving: ' || trim(p_damage_note) || '.'
+      || case when prev.id is not null then ' It was last driven by ' || coalesce(prev.driver_name, 'someone') || ' on '
+           || to_char(prev.sunday, 'FMMonth FMDD') || ' (ended at ' || prev.end_km || ' km)' || case when prev.damage_after then ', who reported damage too' else ', who reported no damage' end || '.'
+         else ' There is no earlier trip in the log.' end);
+  end if;
+  if prev.id is not null and p_start_km <> prev.end_km then
+    insert into alerts (kind, sunday, driver_id, message)
+    values ('van', p_sunday, me.id, 'Church van kilometres don''t match: ' || me.full_name || ' started at ' || p_start_km || ' km, but the last trip ('
+      || coalesce(prev.driver_name, 'someone') || ', ' || to_char(prev.sunday, 'FMMonth FMDD') || ') ended at ' || prev.end_km || ' km. '
+      || case when p_start_km > prev.end_km then (p_start_km - prev.end_km) || ' km were driven without a log entry.' else 'Check the numbers with both drivers.' end);
+  end if;
+  return lid;
+end $$;
+
+-- After parking: kilometres, fuel, receipt and any new damage.
+create or replace function van_log_end(p_log uuid, p_end_km int, p_fuel text, p_fuel_bought boolean default false,
+                                       p_litres numeric default null, p_cost numeric default null, p_receipt_given boolean default false,
+                                       p_damage boolean default false, p_damage_note text default null, p_notes text default null)
+returns text
+language plpgsql security definer set search_path = public, pg_temp as $$
+declare me profiles; l van_logs;
+begin
+  select * into me from profiles where user_id = auth.uid();
+  select * into l from van_logs where id = p_log for update;
+  if not found then raise exception 'That van log was not found.'; end if;
+  if l.driver_id is distinct from me.id and not is_leader() then raise exception 'Only the person who started this log can finish it.'; end if;
+  if l.after_at is not null and not is_leader() then raise exception 'This trip is already logged.'; end if;
+  if p_end_km is null or p_end_km < l.start_km then raise exception 'The kilometres at the end can''t be less than at the start (%).', l.start_km; end if;
+  if p_end_km - l.start_km > 1000 then raise exception 'That is over 1000 km for one day. Check the number.'; end if;
+  if coalesce(p_fuel_bought, false) and (p_cost is null or p_cost <= 0) then raise exception 'Enter how much the fuel cost.'; end if;
+  if p_damage and coalesce(trim(p_damage_note), '') = '' then raise exception 'Describe the damage (where and what happened).'; end if;
+  update van_logs set after_at = now(), end_km = p_end_km, fuel_end = p_fuel, fuel_bought = coalesce(p_fuel_bought, false),
+         fuel_litres = case when p_fuel_bought then p_litres end, fuel_cost = case when p_fuel_bought then p_cost end,
+         receipt_given = coalesce(p_receipt_given, false), damage_after = coalesce(p_damage, false),
+         damage_after_note = nullif(trim(p_damage_note), ''), notes = nullif(trim(p_notes), '')
+   where id = p_log;
+  if coalesce(p_damage, false) then
+    insert into alerts (kind, sunday, driver_id, message)
+    values ('van', l.sunday, l.driver_id, coalesce(l.driver_name, 'The driver') || ' reported damage to the church van after driving: ' || trim(p_damage_note) || '.');
+  end if;
+  if coalesce(p_fuel_bought, false) and not coalesce(p_receipt_given, false) then
+    insert into alerts (kind, sunday, driver_id, message)
+    values ('van', l.sunday, l.driver_id, coalesce(l.driver_name, 'The driver') || ' bought fuel for the church van ($' || to_char(p_cost, 'FM9990.00')
+      || ') and still has to give the receipt to the secretary.');
   end if;
   return 'ok';
 end $$;
 
--- Leaders: the van's rides home after the service, saved with the plan.
-create or replace function save_home_rides(p_sunday date, p_rides jsonb)
-returns int
+-- Mark the fuel receipt as given to the secretary (the driver later, or a leader).
+create or replace function van_log_receipt(p_log uuid)
+returns text
 language plpgsql security definer set search_path = public, pg_temp as $$
-declare pid uuid; n int;
 begin
-  if not is_leader() then raise exception 'Only leaders can save the plan.'; end if;
-  select id into pid from plans where sunday = p_sunday;
-  if pid is null then raise exception 'Save the plan for that day first.'; end if;
-  delete from home_rides where plan_id = pid;
-  insert into home_rides (plan_id, rider_id, stop_order, drop_min, seats)
-  select pid, (e ->> 'riderId')::uuid, coalesce((e ->> 'order')::int, 0), (e ->> 'dropMin')::int, greatest(coalesce((e ->> 'seats')::int, 1), 1)
-  from jsonb_array_elements(coalesce(p_rides, '[]'::jsonb)) e;
-  get diagnostics n = row_count;
-  if n > 0 and exists (select 1 from plans where id = pid and status = 'approved')
-     and not exists (select 1 from van_shifts where sunday = p_sunday and driver_id is not null) then
-    raise exception 'Choose who drives the church van before approving rides home.';
-  end if;
-  if (select coalesce(sum(seats), 0) from home_rides where plan_id = pid) > (select coalesce(max(seats), 0) from profiles where is_vehicle) then
-    raise exception 'More people going home in the van than it has seats.';
-  end if;
-  return n;
+  update van_logs set receipt_given = true
+   where id = p_log and (is_leader() or driver_id = (select id from profiles where user_id = auth.uid()));
+  if not found then raise exception 'That van log was not found.'; end if;
+  return 'ok';
 end $$;
 
--- The van driver's list of people to take home (approved plans only).
-create or replace function my_van_home(p_sunday date)
-returns table (stop_order int, drop_min int, depart_min int, rider_name text, rider_phone text, address text,
-               neighbourhood text, lat double precision, lng double precision, seats int, rider_notes text)
+-- The van driver's log for a day, plus how the last trip ended (so they can compare).
+create or replace function my_van_log(p_sunday date)
+returns table (id uuid, start_km int, fuel_start text, damage_before boolean, before_at timestamptz,
+               end_km int, fuel_end text, fuel_bought boolean, fuel_cost numeric, receipt_given boolean, after_at timestamptz,
+               last_driver text, last_end_km int, last_sunday date, last_damage boolean)
 language sql stable security definer set search_path = public, pg_temp as $$
-  select h.stop_order, h.drop_min, s.home_depart_min, r.full_name, r.phone, r.home_address, r.neighbourhood, r.lat, r.lng, h.seats, r.notes
-  from home_rides h
-  join plans p on p.id = h.plan_id and p.status = 'approved' and p.sunday = p_sunday
-  join van_shifts s on s.sunday = p.sunday
-  join profiles me on me.id = s.driver_id and me.user_id = auth.uid()
-  join profiles r on r.id = h.rider_id
-  left join ride_requests q on q.rider_id = h.rider_id and q.sunday = p.sunday
-  where coalesce(q.status, 'requested') <> 'cancelled'
-  order by h.stop_order
+  with me as (select id from profiles where user_id = auth.uid()),
+       mine as (select l.* from van_logs l, me where l.sunday = p_sunday and l.driver_id = me.id order by l.before_at desc limit 1),
+       prev as (select l.* from van_logs l where l.end_km is not null and l.id not in (select id from mine) order by l.after_at desc limit 1)
+  select m.id, m.start_km, m.fuel_start, m.damage_before, m.before_at, m.end_km, m.fuel_end, m.fuel_bought, m.fuel_cost, m.receipt_given, m.after_at,
+         p.driver_name, p.end_km, p.sunday, p.damage_after
+  from (select 1) one
+  left join mine m on true
+  left join prev p on true
+  where exists (select 1 from van_shifts s, me where s.sunday = p_sunday and s.driver_id = me.id)
+     or exists (select 1 from mine)
 $$;
 
 -- A rider's own rides. For the church van, the "driver" is whoever drives the van that day.
@@ -120,7 +210,7 @@ create function my_rides()
 returns table (sunday date, status text, ride_home boolean, note text, extra_people int, can_split boolean,
                driver_name text, driver_phone text, vehicle text,
                seats int, trip int, pickup_min int, ready_by_min int, arrive_min int, waitlisted_seats int,
-               in_van boolean, home_drop_min int, home_depart_min int, home_driver_name text, home_driver_phone text)
+               in_van boolean)
 language sql stable security definer set search_path = public, pg_temp as $$
   select r.sunday,
          case when r.status = 'cancelled' then 'cancelled'
@@ -137,11 +227,7 @@ language sql stable security definer set search_path = public, pg_temp as $$
          case when r.status <> 'cancelled' and p.status = 'approved' then a.ready_by_min end,
          case when r.status <> 'cancelled' and p.status = 'approved' then a.arrive_min end,
          case when r.status <> 'cancelled' and p.status = 'approved' then w.seats end,
-         coalesce(d.is_vehicle, false),
-         case when r.status <> 'cancelled' and p.status = 'approved' then h.drop_min end,
-         case when r.status <> 'cancelled' and p.status = 'approved' and h.rider_id is not null then s.home_depart_min end,
-         case when r.status <> 'cancelled' and p.status = 'approved' and h.rider_id is not null then hd.full_name end,
-         case when r.status <> 'cancelled' and p.status = 'approved' and h.rider_id is not null then hd.phone end
+         coalesce(d.is_vehicle, false)
   from ride_requests r
   join profiles me on me.id = r.rider_id and me.user_id = auth.uid()
   left join plans p on p.sunday = r.sunday
@@ -149,8 +235,6 @@ language sql stable security definer set search_path = public, pg_temp as $$
   left join profiles d on d.id = a.driver_id
   left join van_shifts s on s.sunday = r.sunday
   left join profiles vd on d.is_vehicle and vd.id = s.driver_id
-  left join home_rides h on h.plan_id = p.id and h.rider_id = r.rider_id
-  left join profiles hd on h.rider_id is not null and hd.id = s.driver_id
   left join waitlist w on w.plan_id = p.id and w.rider_id = r.rider_id
   where r.sunday >= today_regina()
   order by r.sunday, a.trip, a.stop_order
@@ -165,13 +249,13 @@ returns table (trip int, stop_order int, pickup_min int, ready_by_min int, arriv
                lat double precision, lng double precision,
                minor boolean,
                rider_notes text, request_note text, ride_home boolean, extra_people int, seats int, party_total int,
-               in_van boolean)
+               in_van boolean, van_start text)
 language sql stable security definer set search_path = public, pg_temp as $$
   select a.trip, a.stop_order, a.pickup_min, a.ready_by_min, a.arrive_min, a.depart_min,
          r.full_name, r.phone, r.home_address, r.neighbourhood, r.lat, r.lng,
          r.minor,
          r.notes, q.note, coalesce(q.ride_home, false), coalesce(q.extra_people, 0), a.seats, 1 + coalesce(q.extra_people, 0),
-         d.is_vehicle
+         d.is_vehicle, case when d.is_vehicle then s.start_from end
   from assignments a
   join plans p on p.id = a.plan_id and p.status = 'approved' and p.sunday = p_sunday
   join profiles d on d.id = a.driver_id
@@ -304,11 +388,18 @@ begin
   return new;
 end $$;
 
-grant select on van_shifts, home_rides to authenticated;
-revoke all on van_shifts, home_rides from anon;
+create or replace function push_on_alert() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  perform push_to_leaders(case new.kind when 'info' then 'Rides update' when 'van' then 'Church van' else 'Rides alert' end, new.message, 'alert');
+  return new;
+end $$;
+
+grant select on van_shifts, van_logs to authenticated;
+revoke all on van_shifts, van_logs from anon;
 revoke execute on all functions in schema public from public, anon;
 grant execute on all functions in schema public to authenticated;
 revoke execute on function claim_push() from authenticated, public, anon;
 grant execute on function claim_push() to service_role;
 
-select 'The church van is ready. Add it in the app: Plan tab -> Church van.' as result;
+select 'The church van and its logbook are ready. Add the van in the app: Plan tab -> Church van.' as result;

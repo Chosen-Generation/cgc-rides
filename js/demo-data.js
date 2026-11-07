@@ -63,7 +63,6 @@ export function makeDemoState(now = new Date()) {
     ...["r-mary", "r-peter", "r-amara", "r-tobi", "r-lydia", "r-david", "r-faith", "r-joy", "r-kofi", "r-isaac"].map((id) => mk(id, first)),
   ];
   requests[0].rideHome = true;
-  for (const id of ["r-lydia", "r-kofi"]) requests.find((r) => r.riderId === id).rideHome = true;
   requests.find((r) => r.riderId === "r-faith").extraPeople = 2; // Faith is bringing two children
 
   // Ruth (second trip) is free the first Sunday; Daniel is away the second.
@@ -72,7 +71,7 @@ export function makeDemoState(now = new Date()) {
     { driverId: "d-daniel", sunday: sundays[1], available: false, note: "Away" },
   ];
   // Samuel drives the church van on the first Sunday.
-  const vanShifts = [{ sunday: first, driverId: "d-samuel", homeDepartMin: null }];
+  const vanShifts = [{ sunday: first, driverId: "d-samuel", startFrom: "church" }];
   return { sundays, profiles, requests, weeks, vanShifts, plans: {}, alerts: [], consentLog: [], help: [], services: [], teamLog: [], pushLog: [],
     signupIssues: [{ at: inDays(-1), email: "vanessa.example@demo.invalid", category: "Home address", message: "We couldn't find that exact house.", role: "rider" }],
     unregistered: [{ email: "vanessa.example@demo.invalid", signedUpAt: inDays(-1), lastSignInAt: inDays(-1) }, { email: "tobi.example@demo.invalid", signedUpAt: inDays(-1), lastSignInAt: null }] };

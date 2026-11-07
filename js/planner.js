@@ -6,7 +6,7 @@ import { buildTravel } from "./routing.js";
 import { asDriver, isDriver, driverAvailable } from "./models.js";
 import { toMin } from "./dates.js";
 import { isConfirmed } from "./geo.js";
-import { withVan, planHome, homeDepartFor } from "./van.js";
+import { withVan } from "./van.js";
 
 export function matchOptions(config) {
   return {
@@ -59,18 +59,12 @@ async function travelFor(people, church, config, fetchFn) {
   return { ...t, travel: withMargin(t.travel, t.source, config.matching) };
 }
 
-/** The van's rides home for a day (null if there's no van or nobody asked). */
-function homeFor(people, church, config, travel, data, sunday) {
-  const van = people.drivers.find((d) => d.isVehicle);
-  return planHome({ church, van, riders: people.riders, travel, departMin: homeDepartFor(data, sunday, config.service.time), stopMin: config.matching.stopMin ?? 3 });
-}
-
 /** Draft a plan. `keep` = assignments to leave alone (used after a cancellation). */
 export async function draftPlan({ data, sunday, church, config, keep = [], fetchFn }) {
   const people = sundayPeople(data, sunday);
   const t = await travelFor(people, church, config, fetchFn);
   const result = plan({ church, ...people, travel: t.travel, date: sunday, options: matchOptions(config), keep });
-  return { ...result, home: homeFor(people, church, config, t.travel, data, sunday), travelSource: t.source, travelNote: t.note };
+  return { ...result, travelSource: t.source, travelNote: t.note };
 }
 
 /** Re-time and re-check a plan after the leader moves someone by hand. */
@@ -78,7 +72,7 @@ export async function recompute({ data, sunday, church, config, assignments, wai
   const people = sundayPeople(data, sunday);
   const t = await travelFor(people, church, config, fetchFn);
   const ev = evaluate({ church, ...people, assignments, travel: t.travel, date: sunday, options: matchOptions(config) });
-  return { ...ev, waitlist, home: homeFor(people, church, config, t.travel, data, sunday), travelSource: t.source, travelNote: t.note };
+  return { ...ev, waitlist, travelSource: t.source, travelNote: t.note };
 }
 
 /**

@@ -28,6 +28,7 @@ export const DEFAULTS = {
   readyBy: null, // optional fixed ceiling such as "10:45"; null = work it out from the route
   readyBufferMin: 5, // be ready this long before the driver is due
   vanPreferMin: 12, // the church van is preferred by this many minutes, so it takes clusters and fewer cars go out
+  newCarPenaltyMin: 20, // on a van day, bringing another car out "costs" this much, so the van fills up first
 };
 
 const opts = (o) => ({ ...DEFAULTS, ...(o || {}) });
@@ -251,6 +252,7 @@ export function plan({ church, drivers, riders, travel, date, options, keep = []
     state.set(d.id, { d, trips: [{ start: dn, stops: [] }, { start: cn, stops: [] }] });
   }
   const states = [...state.values()];
+  const vanDay = states.some((s) => s.d.isVehicle);
 
   // Assignments the leader already settled (used when re-planning after a cancellation).
   const riderById = new Map(riders.map((r) => [r.id, r]));
@@ -304,7 +306,8 @@ export function plan({ church, drivers, riders, travel, date, options, keep = []
       }
       // The van starts at church, so any rider is a round trip for it: only the total route limit applies.
       if ((!st.d.isVehicle && cost > o.maxDetourMin) || base + cost > o.maxRouteMin) continue;
-      cands.push({ st, trip, pos, cost, chunk, rank: cost - (st.d.isVehicle ? o.vanPreferMin : 0) });
+      const newCar = vanDay && !st.d.isVehicle && tripIdx === 0 && !trip.stops.length ? o.newCarPenaltyMin : 0;
+      cands.push({ st, trip, pos, cost, chunk, rank: cost + newCar - (st.d.isVehicle ? o.vanPreferMin : 0) });
     }
     cands.sort(
       (a, b) =>
