@@ -590,11 +590,37 @@ async function saveServiceForm(form) {
   }
   const arrive = Math.max(0, Math.min(90, Number(v("arriveBefore")) || 0));
   const before = serviceFor(date);
+  const isNewSpecial = !sunday && !before.changed;
   await store.saveService({ date, title, time, arriveBeforeMin: arrive, cutoff, cancelled: false, note: v("note") });
   S.editingService = null;
   await reload();
   const taken = await unshareIfChanged(date, before);
-  say(`Saved. Everyone's dashboard now shows it. Send the announcement from the Texts tab.${taken ? " The plan for that day went back to a draft with new times: check it and approve it again." : ""}`);
+  // A new special service: ask the cleared drivers if they can drive, and tell riders they can ask.
+  let told = "";
+  if (isNewSpecial) {
+    const n = await notifySpecial(date).catch(() => null);
+    if (n) told = ` Notified ${n.drivers} driver${n.drivers === 1 ? "" : "s"} and ${n.riders} rider${n.riders === 1 ? "" : "s"} who have notifications on.`;
+  }
+  say(`Saved. Everyone's dashboard now shows it.${told} Send the announcement from the Texts tab too.${taken ? " The plan for that day went back to a draft with new times: check it and approve it again." : ""}`);
+}
+
+/** Notifications for a new special service. Returns how many drivers / riders have notifications on. */
+async function notifySpecial(date) {
+  const svc = serviceFor(date);
+  const when = `${dayLabelFor(date, { long: true })} at ${fmtMin(toMin(svc.time))}`;
+  const people = S.data?.profiles || [];
+  const on = new Set(S.data?.pushPeople || []);
+  const drivers = people.filter((p) => !p.isVehicle && (p.role === "driver" || p.role === "leader") && p.status === "cleared" && p.userId);
+  const riders = people.filter((p) => p.role === "rider" && p.userId);
+  const items = [
+    ...drivers.map((p) => ({ profileId: p.id, tag: `special-${date}`, title: `Special service: ${svc.title}`,
+      body: `${when}. Can you give rides? Open the app and tap "I can drive" for that day.` })),
+    ...riders.map((p) => ({ profileId: p.id, tag: `special-${date}`, title: `Special service: ${svc.title}`,
+      body: `${when}. Need a ride? Tap "I need a ride" for that day by ${cutoffFor(date)}.` })),
+  ];
+  await store.queuePush(items);
+  await store.flushPush();
+  return { drivers: drivers.filter((p) => on.has(p.id)).length, riders: riders.filter((p) => on.has(p.id)).length };
 }
 
 /** Sends the last-minute request to the ticked drivers' dashboards. The first to say yes gets the ride. */

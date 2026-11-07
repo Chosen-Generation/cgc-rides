@@ -52,6 +52,9 @@ export function makeDemoState(now = new Date()) {
     base("r-kofi", "Kofi Asante", "Westmount", { gender: "M" }),
     base("r-naomi", "Naomi Clarke", "Varsity View", { gender: "F" }),
     base("r-isaac", "Isaac Moyo", "Avalon", { gender: "M", notes: "No saved map location; leader must set one" }),
+    // The church van: a vehicle, not a person. Parked at the (demo) church.
+    { ...base("van", "Church van", "Nutana", { role: "driver", status: "cleared", seats: 14, secondTrip: true, drivesEveryWeek: true, vehicle: "Church van", licenceOk: true, insuranceOk: true }),
+      userId: null, email: null, phone: null, isVehicle: true, address: "At the church", lat: DEMO_CHURCH.lat, lng: DEMO_CHURCH.lng, geoSource: "manual" },
   ];
 
   const mk = (riderId, sunday, rideHome = false, note = null) => ({ id: `q-${riderId}-${sunday}`, riderId, sunday, rideHome, note, status: "requested" });
@@ -60,6 +63,7 @@ export function makeDemoState(now = new Date()) {
     ...["r-mary", "r-peter", "r-amara", "r-tobi", "r-lydia", "r-david", "r-faith", "r-joy", "r-kofi", "r-isaac"].map((id) => mk(id, first)),
   ];
   requests[0].rideHome = true;
+  for (const id of ["r-lydia", "r-kofi"]) requests.find((r) => r.riderId === id).rideHome = true;
   requests.find((r) => r.riderId === "r-faith").extraPeople = 2; // Faith is bringing two children
 
   // Ruth (second trip) is free the first Sunday; Daniel is away the second.
@@ -67,7 +71,9 @@ export function makeDemoState(now = new Date()) {
     { driverId: "d-ruth", sunday: first, available: true },
     { driverId: "d-daniel", sunday: sundays[1], available: false, note: "Away" },
   ];
-  return { sundays, profiles, requests, weeks, plans: {}, alerts: [], consentLog: [], help: [], services: [], teamLog: [], pushLog: [],
+  // Samuel drives the church van on the first Sunday.
+  const vanShifts = [{ sunday: first, driverId: "d-samuel", homeDepartMin: null }];
+  return { sundays, profiles, requests, weeks, vanShifts, plans: {}, alerts: [], consentLog: [], help: [], services: [], teamLog: [], pushLog: [],
     signupIssues: [{ at: inDays(-1), email: "vanessa.example@demo.invalid", category: "Home address", message: "We couldn't find that exact house.", role: "rider" }],
     unregistered: [{ email: "vanessa.example@demo.invalid", signedUpAt: inDays(-1), lastSignInAt: inDays(-1) }, { email: "tobi.example@demo.invalid", signedUpAt: inDays(-1), lastSignInAt: null }] };
 }
