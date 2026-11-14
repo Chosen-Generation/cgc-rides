@@ -326,7 +326,7 @@ const actions = {
   "signin-reset"() { S.signInSent = ""; },
   async viewas(d) { store.viewAs(d.id); S.session = store.session(); S.tab = null; S.sunday = null; S.planView = null; S.editing = null; await reload(); say(`Viewing as ${S.me?.name}`); },
   async signout() { await store.signOut(); S.session = null; S.me = null; S.screen = "landing"; S.tab = null; S.planView = null; S.regRole = null; },
-  tab(d) { S.tab = d.tab; S.editing = null; S.formDraft = null; S.remindResult = null; S.rideRemindResult = null; if (S.pushNote?.kind !== "wait") S.pushNote = null; },
+  tab(d) { S.tab = d.tab; S.editing = null; S.formDraft = null; S.remindResult = null; S.rideRemindResult = null; S.addRiderOpen = false; if (S.pushNote?.kind !== "wait") S.pushNote = null; },
   async "pick-sunday"(d) {
     if (d.sunday === S.sunday) return;
     if (S.planView?.dirty && S.planView.edited && !confirm("You have unsaved changes to this plan. Switch anyway?")) return;
@@ -690,6 +690,19 @@ async function onSubmit(form) {
       receiptGiven: f.get("receiptGiven") === "on", damage, damageNote: String(f.get("damageNote") || "").trim(), notes: String(f.get("notes") || "").trim() });
     await reload();
     say(`Thank you! The van is logged.${fuelBought && f.get("receiptGiven") !== "on" ? " Please give the fuel receipt to the church secretary." : ""}`);
+    return;
+  }
+  if (kind === "add-rider") {
+    const f = new FormData(form);
+    const sunday = form.dataset.sunday;
+    const p = S.data.profiles.find((x) => x.id === f.get("rider"));
+    if (!p) throw new Error("Choose a rider first.");
+    const extraPeople = Math.max(0, Math.min(10, Number(f.get("extraPeople")) || 0));
+    await store.addRequest(p.id, sunday, { extraPeople, canSplit: f.get("canSplit") === "on", note: String(f.get("note") || "").trim() || null });
+    S.addRiderOpen = true;
+    await reload();
+    const placed = S.planView?.assignments?.some((a) => a.riderId === p.id);
+    say(`${p.name} added to ${dayLabelFor(sunday)}.${!isConfirmed(p) ? " Their address isn't confirmed, so they'll stay on the waiting list until you place a pin for them (People → Edit)." : placed ? " They're in the plan now: check it, then Approve & share so they and their driver are told." : " Check the plan: if no car has room, they're on the waiting list."}`);
     return;
   }
   if (kind === "van-setup") {

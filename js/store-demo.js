@@ -338,7 +338,7 @@ export function createDemoStore({ now = () => new Date() } = {}) {
     async addRequest(riderId, sunday, { rideHome = false, note = null, extraPeople = 0, canSplit = false } = {}) {
       need(isLeader(), "Only the transport leader can do this.");
       const ex = db.requests.find((r) => r.riderId === riderId && r.sunday === sunday);
-      if (ex && ex.status === "cancelled") db.alerts.forEach((a) => { if (a.kind === "rider_cancel" && a.riderId === m.id && a.sunday === sunday) a.resolved = true; });
+      if (ex && ex.status === "cancelled") db.alerts.forEach((a) => { if (a.kind === "rider_cancel" && a.riderId === riderId && a.sunday === sunday) a.resolved = true; });
       if (ex) Object.assign(ex, { status: "requested", rideHome, note, extraPeople, canSplit });
       else db.requests.push({ id: `q-${riderId}-${sunday}`, riderId, sunday, rideHome, note, extraPeople, canSplit, status: "requested" });
     },
