@@ -437,6 +437,26 @@ function vanLogbookList(S) {
     <ul class="plain vanloglist">${logs.slice(0, 30).map(row).join("")}</ul></details>`;
 }
 
+// Leaders add a registered rider to the selected day (e.g. they forgot to ask before the cutoff).
+function addRiderBox(S, sunday) {
+  const svc = serviceFor(sunday);
+  if (svc.cancelled) return "";
+  const active = new Set((S.data.requests || []).filter((r) => r.sunday === sunday && r.status !== "cancelled").map((r) => r.riderId));
+  const cancelled = new Set((S.data.requests || []).filter((r) => r.sunday === sunday && r.status === "cancelled").map((r) => r.riderId));
+  const riders = (S.data.profiles || []).filter((p) => p.role === "rider" && !active.has(p.id)).sort((a, b) => a.name.localeCompare(b.name));
+  if (!riders.length) return "";
+  const label = (p) => `${p.name}${p.neighbourhood ? ` · ${p.neighbourhood}` : ""}${cancelled.has(p.id) ? " · cancelled earlier" : ""}${!isConfirmed(p) ? " · address not confirmed" : ""}`;
+  return `<details class="card soft" ${S.addRiderOpen ? "open" : ""}><summary>➕ Add a registered rider to ${esc(dayLabel(sunday))}</summary>
+    <form data-form="add-rider" data-sunday="${esc(sunday)}" class="stack">
+      <p class="small muted">For someone who's registered but didn't ask in time (leaders can add riders after the cutoff). They're added to the plan like any other request; approve the plan again so they and their driver are told.</p>
+      <label class="field">Rider <select name="rider" required><option value="">Choose a registered rider…</option>${riders.map((p) => `<option value="${esc(p.id)}">${esc(label(p))}</option>`).join("")}</select></label>
+      <label class="field">People coming with them <input name="extraPeople" type="number" min="0" max="10" value="0" inputmode="numeric"></label>
+      <label class="check"><input type="checkbox" name="canSplit"> They said it's OK to split across cars</label>
+      <label class="field">Note for the driver (optional) <input name="note" placeholder="e.g. side door, call on arrival"></label>
+      <button class="btn primary" type="submit">Add to ${esc(dayLabel(sunday))}</button>
+    </form></details>`;
+}
+
 // The church van on the selected day: add it once, then choose who drives it (or nobody).
 function vanCard(S, sunday) {
   const van = findVan(S.data.profiles);
@@ -508,7 +528,7 @@ function planTab(S) {
   }
   html += `<p class="small muted">Times use real road times plus a ${esc(S.config.matching.trafficPct ?? 20)}% safety margin and ${esc(S.config.matching.legBufferMin ?? 1)} min per drive, ${esc(S.config.matching.stopMin)} min at each house, arriving ${esc(serviceFor(sunday).arriveBeforeMin)} min before the service at ${esc(timeLabel(sunday))}.</p>`;
   if (S.mode === "demo") html += banner("info", `Demo plans use a placeholder church location (${esc(S.demoChurchLabel)}).`);
-  html += vanCard(S, sunday);
+  html += vanCard(S, sunday) + addRiderBox(S, sunday);
   html += `<div class="tiles"><div class="tile"><b>${askingPeople}</b>people asking</div><div class="tile"><b>${seats}</b>seats offered</div>
     <div class="tile"><b>${pv?.assignments.reduce((n, a) => n + (a.seats ?? 1), 0) ?? 0}</b>${pv && pv.status === "approved" && !pv.dirty ? "seated and shared" : "in a car (not shared yet)"}</div><div class="tile"><b>${pv?.waitlist.reduce((n, w) => n + (w.seats ?? 1), 0) ?? 0}</b>waiting</div></div>`;
   if (askingPeople > seats) html += banner("warn", `${askingPeople} people are asking (counting those coming with riders) but only ${seats} seats are offered. Ask drivers about a second trip, or recruit another driver.`);
